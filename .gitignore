@@ -20,3 +20,5 @@ ENV/
 .DS_Store
 
 *.log
+
+*.egg-info
