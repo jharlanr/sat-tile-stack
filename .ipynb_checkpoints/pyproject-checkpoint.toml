@@ -1,0 +1,39 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "sat-tile-stack"
+version = "0.1.0"
+description = "Generate daily, multi-band Sentinel-2 tile time-stacks around a point from STAC"
+readme = "README.md"
+license = { file = "LICENSE" }
+authors = [
+  { name = "Your Name", email = "you@example.com" }
+]
+requires-python = ">=3.7"
+
+dependencies = [
+  "numpy",
+  "pandas",
+  "geopandas",
+  "xarray",
+  "rioxarray",
+  "matplotlib",
+  "dask[complete]",        # core + array + diagnostics
+  "pystac-client",
+  "planetary-computer",
+  "rasterio",
+  "stackstac",
+  "pyproj",
+  "shapely",
+  "scipy",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest",
+  "flake8",
+  "black",
+  "mypy",
+]

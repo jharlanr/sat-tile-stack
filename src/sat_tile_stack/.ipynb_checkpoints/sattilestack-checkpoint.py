@@ -37,7 +37,8 @@ from scipy.ndimage import binary_propagation
 from scipy.ndimage import label
 
 # imports from my package
-from sat_tile_stack.bounds import bounds_latlon_around
+from .bounds import bounds_latlon_around, best_crs_for_point
+from .utils  import combo_scaler
 
 
 ## ========= ##
@@ -131,12 +132,6 @@ def sattile_stack(catalog, centroid, band_names, pix_res=10, tile_size=1024, tim
     
     # IF NORMALIZING
     if normalize:
-        def combo_scaler(x, range_max=1):
-            median_x = np.nanmedian(x)
-            iqr_x = np.nanpercentile(x,75) - np.nanpercentile(x,25)
-            robust_x = ((x-median_x)/iqr_x)
-            return ((robust_x - np.nanmin(robust_x)) / (np.nanmax(robust_x) - np.nanmin(robust_x))) * range_max
-        
         stack_rechunk = stack_daily.chunk({'y': -1, 'x': -1})
         stack_daily = xr.apply_ufunc(
             combo_scaler,            

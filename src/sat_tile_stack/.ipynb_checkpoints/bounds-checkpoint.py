@@ -1,4 +1,7 @@
-
+import pyproj
+from shapely.geometry import box
+from shapely.ops import transform
+import math 
 
 
 ## FUNCTION TO DEFINE BOUNDING BOX AROUND A GIVEN CENTROID
@@ -8,34 +11,6 @@ def bounds_latlon_around(center_lon, center_lat, side_m=10000):
     side_m                 : length of box side in meters (default 10 km)
     returns                 : (minx, miny, maxx, maxy) in lon/lat
     """
-    
-    # FIND BEST CRS FOR CENTROID
-    def best_crs_for_point(lon, lat):
-        """
-        Choose a projected CRS (EPSG) that minimizes distortion
-        for a small box around (lon, lat).
-
-        - |lat| ≥ 60° → Polar Stereographic (EPSG:3413 North / 3031 South)
-        - else         → UTM zone based on lon
-
-        Returns a pyproj.CRS object.
-        """
-        if lat >= 60:
-            # Arctic Polar Stereographic
-            return pyproj.CRS.from_epsg(3413)
-        elif lat <= -60:
-            # Antarctic Polar Stereographic
-            return pyproj.CRS.from_epsg(3031)
-        else:
-            # UTM
-            zone_number = int(math.floor((lon + 180) / 6) + 1)
-            is_south   = lat < 0
-            # Construct a PROJ string for UTM:
-            proj4 = (
-                f"+proj=utm +zone={zone_number} "
-                f"+{'south' if is_south else 'north'} +datum=WGS84 +units=m +no_defs"
-            )
-            return pyproj.CRS.from_proj4(proj4)
     
     # SET UP TRANSFORMERS
     centroid = (center_lon, center_lat)
@@ -55,7 +30,7 @@ def bounds_latlon_around(center_lon, center_lat, side_m=10000):
     sq_ll = transform(to_ll, sq_m)
     return sq_ll.bounds
 
-## FUNCTIONN TO FIND BEST CRS FOR CENTROID
+## FUNCTION TO FIND BEST CRS FOR CENTROID
 def best_crs_for_point(lon, lat):
     """
     Choose a projected CRS (EPSG) that minimizes distortion
