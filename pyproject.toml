@@ -38,6 +38,6 @@ dev = [
   "mypy",
 ]
 
-[tool.setuptools.packages.find]
-where  = ["src"]
-include = ["sat_tile_stack", "sat_tile_stack.*"]
+# [tool.setuptools.packages.find]
+# where  = ["src"]
+# include = ["sat_tile_stack", "sat_tile_stack.*"]
