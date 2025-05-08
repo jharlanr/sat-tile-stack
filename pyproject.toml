@@ -20,7 +20,7 @@ dependencies = [
   "xarray",
   "rioxarray",
   "matplotlib",
-  "dask[complete]",        # core + array + diagnostics
+  "dask[complete]",
   "pystac-client",
   "planetary-computer",
   "rasterio",
@@ -37,3 +37,9 @@ dev = [
   "black",
   "mypy",
 ]
+
+[tool.setuptools.packages.find]
+# where to look for packages
+where = ["."]
+# match your package directory name (underscore, not dash)
+include = ["sat_tile_stack", "sat_tile_stack.*"]
