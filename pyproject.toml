@@ -39,7 +39,5 @@ dev = [
 ]
 
 [tool.setuptools.packages.find]
-# where to look for packages
-where = ["."]
-# match your package directory name (underscore, not dash)
+where  = ["src"]
 include = ["sat_tile_stack", "sat_tile_stack.*"]
