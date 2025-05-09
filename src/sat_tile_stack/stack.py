@@ -37,7 +37,7 @@ from scipy.ndimage import binary_propagation
 from scipy.ndimage import label
 
 # imports from my package
-from .bounds import bounds_latlon_around, best_crs_for_point
+from .bounds import sat_mask_array, bounds_latlon_around, best_crs_for_point
 from .utils  import combo_scaler
 
 
@@ -46,7 +46,15 @@ from .utils  import combo_scaler
 ## ========= ##
 
 ## FUNCTION FOR GENERATE A STACK FOR A GIVEN LOCATION ACROSS A DATE RANGE, EACH DAY
-def sattile_stack(catalog, centroid, band_names, pix_res=10, tile_size=1024, time_range='2019-05-01/2019-09-30', normalize=True, pull_to_mem=False):
+def sattile_stack(catalog,
+                  centroid,
+                  band_names,
+                  pix_res=10,
+                  tile_size=1024,
+                  time_range='2019-05-01/2019-09-30',
+                  normalize=True,
+                  mask=None,
+                  pull_to_mem=False):
     """
     Generate a daily, multi-band image time‐stack centered on a point.
 
@@ -76,6 +84,9 @@ def sattile_stack(catalog, centroid, band_names, pix_res=10, tile_size=1024, tim
     normalize : bool, optional
         If True, apply a robust (median/IQR) normalization to each band
         so values are scaled into [0,1] (default: True).
+    mask: string, optional
+        If None, do not generate a mask, if not None (e.g., filepath to a .geojson),
+        generate mask and append to DataArray
     pull_to_mem : bool, optional
         If True, triggers `timestack.compute()` and returns an in-memory
         xarray.DataArray; otherwise returns a lazy dask-backed DataArray
@@ -155,6 +166,13 @@ def sattile_stack(catalog, centroid, band_names, pix_res=10, tile_size=1024, tim
     total = len(band_names) * tile_size * tile_size
     pct_nans = (nan_counts / total) * 100
     timestack = timestack.assign_coords(pct_nans=('time', pct_nans.values))
+    
+    # IF MASK, GENERATE AND APPEND MASK TO DATAARRAY
+    if mask:
+        satmask = sat_mask_array(timestack, mask, feature_id=None)
+        timestack = xr.concat([timestack, satmask], dim="band")
+    else:
+        print(f"no mask generation called")
     
     # PULL STACK INTO MEMORY
     if pull_to_mem:

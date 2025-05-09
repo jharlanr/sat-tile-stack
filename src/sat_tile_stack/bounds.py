@@ -2,7 +2,63 @@ import pyproj
 from shapely.geometry import box
 from shapely.ops import transform
 import math 
+import geopandas as gpd
+import xarray as xr
+from rasterio.features import rasterize
+import numpy as np
 
+## FUNCTION TO CREATE A MASK USING A .geojson FILE
+def sat_mask_array(array_in, filepath_geojson, feature_id=None):
+    
+    # read in .geojson
+    gdf = gpd.read_file(filepath_geojson)
+    gdf = gdf.to_crs(array_in.rio.crs)
+
+    # rasterize to a 2D array of floats (1.0 inside, 0.0 outside)
+    shapes = [(geom, 1.0) for geom in gdf.geometry]
+    mask2d = rasterize(
+        shapes,
+        out_shape=(array_in.sizes["y"], array_in.sizes["x"]),
+        transform=array_in.rio.transform(),
+        fill=0.0,
+        dtype="float32")
+
+    # wrap as an xarray DataArray, with dims ('y','x')
+    mask = xr.DataArray(
+        mask2d,
+        dims=("y", "x"),
+        coords={"y": array_in.y, "x": array_in.x},
+        name="polygon_mask",
+    )
+    
+    # expand to time & band dims
+    mask_4d = (
+        mask
+        .expand_dims(time=array_in.time)           # dims: (time, y, x)
+        .expand_dims(band=["mask"], axis=1)     # dims: (time, band, y, x)
+        .transpose("time", "band", "y", "x")
+    )
+    
+    # propagate all non‐band coords from the input
+    non_band = {
+        nm: crd for nm, crd in array_in.coords.items()
+        if "band" not in crd.dims
+    }
+    mask_4d = mask_4d.assign_coords(non_band)
+    
+    # for each of the original band‐coords (like gsd, title, etc.), give the mask one entry
+    for nm, crd in array_in.coords.items():
+        if crd.dims == ("band",):
+            default = np.nan if np.issubdtype(crd.dtype, np.number) else "mask"
+            one_val = xr.DataArray(
+                [default],
+                coords={"band": ["mask"]},
+                dims=("band",),
+                name=nm,
+            )
+            mask_4d = mask_4d.assign_coords({nm: one_val})
+    
+    return mask_4d
 
 ## FUNCTION TO DEFINE BOUNDING BOX AROUND A GIVEN CENTROID
 def bounds_latlon_around(center_lon, center_lat, side_m=10000):
