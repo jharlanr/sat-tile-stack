@@ -121,7 +121,7 @@ def sattile_stack(catalog,
     # CREATE THE STACK
     stack = stackstac.stack(items, 
                             epsg=proj.ext(items[0]).epsg, 
-                            assets=['B04','B03','B02', 'B08', 'B11'],
+                            assets=band_names,
                             bounds_latlon=bounds_latlon, 
                             resolution=10,
                             chunksize=(1, 1, 4096, 4096),
@@ -173,6 +173,9 @@ def sattile_stack(catalog,
         timestack = xr.concat([timestack, satmask], dim="band")
     else:
         print(f"no mask generation called")
+        
+    # CONVERT TO FLOAT32
+    timestack = timestack.astype('float32')
     
     # PULL STACK INTO MEMORY
     if pull_to_mem:
@@ -188,35 +191,35 @@ def sattile_stack(catalog,
     
     
 
-## ========= ##
-## RUN BLOCK ##
-## ========= ##
-if __name__=="__main__":
+# ## ========= ##
+# ## RUN BLOCK ##
+# ## ========= ##
+# if __name__=="__main__":
     
-    ## CONNECT TO MICROSOFT PLANETARY COMPUTER
-    catalog = pystac_client.Client.open(
-        "https://planetarycomputer.microsoft.com/api/stac/v1",
-        modifier=planetary_computer.sign_inplace,)
-    print(f"connected to Microsoft Planetary Computer")
+#     ## CONNECT TO MICROSOFT PLANETARY COMPUTER
+#     catalog = pystac_client.Client.open(
+#         "https://planetarycomputer.microsoft.com/api/stac/v1",
+#         modifier=planetary_computer.sign_inplace,)
+#     print(f"connected to Microsoft Planetary Computer")
 
-    # DECIDE WHETHER TO NORMALIZE THE IMAGERY UPON COMPLIING OR NOT
-    normalize = False
+#     # DECIDE WHETHER TO NORMALIZE THE IMAGERY UPON COMPLIING OR NOT
+#     normalize = False
 
-    # BOUNDING BOX AROUND LAKE CENTROID
-    centroid = (-122.45, 37.83)
-    # centroid = (-122.45957, 37.80539) # CHRISSY FIELD MARSH
-    # centroid = (-49.495, 68.725) # NORTH LAKE
+#     # BOUNDING BOX AROUND LAKE CENTROID
+#     centroid = (-122.45, 37.83)
+#     # centroid = (-122.45957, 37.80539) # CHRISSY FIELD MARSH
+#     # centroid = (-49.495, 68.725) # NORTH LAKE
 
-    # SPECIFY TIME RANGE
-    time_range = '2019-05-01/2019-09-30'
+#     # SPECIFY TIME RANGE
+#     time_range = '2019-05-01/2019-09-30'
 
-    # SPECIFY IMAGERY BANDS
-    band_names = ["B04",  # red (665 nm)
-                  "B03",  # green (560 nm)
-                  "B02",  # blue (490 nm)
-                  "B08",  # NIR (842 nm)
-                  "B11"]  # SWIR1 (1610 nm)
+#     # SPECIFY IMAGERY BANDS
+#     band_names = ["B04",  # red (665 nm)
+#                   "B03",  # green (560 nm)
+#                   "B02",  # blue (490 nm)
+#                   "B08",  # NIR (842 nm)
+#                   "B11"]  # SWIR1 (1610 nm)
 
-    # CALL FUNCTION TO GENERATE TIMESTACK
-    timestack = sattile_stack(catalog, centroid, band_names, pix_res=10, tile_size=1024, time_range='2019-05-01/2019-09-30', normalize=True, pull_to_mem=True)
+#     # CALL FUNCTION TO GENERATE TIMESTACK
+#     timestack = sattile_stack(catalog, centroid, band_names, pix_res=10, tile_size=1024, time_range='2019-05-01/2019-09-30', normalize=True, pull_to_mem=True)
     
