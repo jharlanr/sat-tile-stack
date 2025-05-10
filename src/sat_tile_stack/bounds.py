@@ -8,11 +8,10 @@ from rasterio.features import rasterize
 import numpy as np
 
 ## FUNCTION TO CREATE A MASK USING A .geojson FILE
-def sat_mask_array(array_in, filepath_geojson, feature_id=None):
+def sat_mask_array(array_in, gdf_geojson, feature_id=None):
     
-    # read in .geojson
-    gdf = gpd.read_file(filepath_geojson)
-    gdf = gdf.to_crs(array_in.rio.crs)
+    # align .geojson crs
+    gdf = gdf_geojson.to_crs(array_in.rio.crs)
 
     # rasterize to a 2D array of floats (1.0 inside, 0.0 outside)
     shapes = [(geom, 1.0) for geom in gdf.geometry]

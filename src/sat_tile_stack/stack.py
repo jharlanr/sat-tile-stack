@@ -168,7 +168,7 @@ def sattile_stack(catalog,
     timestack = timestack.assign_coords(pct_nans=('time', pct_nans.values))
     
     # IF MASK, GENERATE AND APPEND MASK TO DATAARRAY
-    if mask:
+    if mask is not None:
         satmask = sat_mask_array(timestack, mask, feature_id=None)
         timestack = xr.concat([timestack, satmask], dim="band")
     else:
