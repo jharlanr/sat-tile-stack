@@ -125,7 +125,12 @@ def sattile_stack(catalog,
                             bounds_latlon=bounds_latlon, 
                             resolution=10,
                             chunksize=(1, 1, 4096, 4096),
+                            fill_value=np.nan,
                             )
+    
+    # MASK OUT BLACK 0.0 PIXELS AS NaNs
+    nodata_mask = (stack == 0).all(dim="band")   # True where every band is zero
+    stack = stack.where(~nodata_mask)            # nodata → NaN, real zeros kept
     
     # SAMPLE DAILY, PRESERVING CLOUD COVER IN THE METADATA
     stack_daily = stack.resample(time="D").mean("time", keep_attrs=True)
@@ -140,6 +145,7 @@ def sattile_stack(catalog,
     daily_cc = daily_cc.reindex(time=full_days, fill_value=np.nan)
     stack_daily = stack_daily.assign_coords(eo_cloud_cover=daily_cc)
     # print(f"stack_daily shape: {stack_daily.shape}")
+    
     
     # IF NORMALIZING
     if normalize:
