@@ -4,6 +4,7 @@
 ## Installation and Dependencies
 For now, `sat_tile_stack` can be installed via
 ```bash
-pip install sat_tile_stack
+pip install --upgrade --force-reinstall git+https://github.com/jharlanr/sat-tile-stack.git
 ```
-But this will be
+
+## Example usage
