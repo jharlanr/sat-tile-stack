@@ -13,3 +13,15 @@ pip install --upgrade --force-reinstall git+https://github.com/jharlanr/sat-tile
 ## Example usage
 Check out a brief tutorial [here](https://github.com/jharlanr/sat-tile-stack/tree/main/notebooks/cc_tutorial.ipynb)
 
+
+# How to Contribute
+
+This package is being actively developed
+[here](https://github.com/jharlanr/sat-tile-stack).
+
+If you would like to add new functionality, we welcome new contributions from
+anyone as pull requests on [our Github repo](https://github.com/jharlanr/sat-tile-stack).
+
+No contribution is too small, and we also welcome requests for new features
+or bug reports. To contribute to `sat-tile-stack` this way, please 
+[open an issue on GitHub](https://github.com/jharlanr/sat-tile-stack/issues).
