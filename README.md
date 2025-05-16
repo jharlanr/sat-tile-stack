@@ -11,4 +11,5 @@ pip install --upgrade --force-reinstall git+https://github.com/jharlanr/sat-tile
 ```
 
 ## Example usage
-Check out a brief tutorial in the 
+Check out a brief tutorial [here](https://github.com/jharlanr/sat-tile-stack/notebooks/cc_tutorial.ipynb)
+
