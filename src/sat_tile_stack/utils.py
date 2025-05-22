@@ -46,11 +46,11 @@ import json, numpy as np
 
 #     return scaled.astype(dtype)
 
-def combo_scaler(x, range_max=1):
+def combo_scaler(x, p2=75, p1=25, range_max=1):
     x = np.asarray(x)
     with np.errstate(all="ignore"):
         median_x = np.nanmedian(x)
-        iqr = np.nanpercentile(x, 95) - np.nanpercentile(x, 5)
+        iqr = np.nanpercentile(x, p2) - np.nanpercentile(x, p1)
         robust = (x - median_x) / iqr
         mn, mx = np.nanmin(robust), np.nanmax(robust)
         scaled = (robust - mn) / (mx - mn) * range_max
