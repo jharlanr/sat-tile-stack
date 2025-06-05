@@ -11,7 +11,7 @@ pip install --upgrade --force-reinstall git+https://github.com/jharlanr/sat-tile
 ```
 
 ## Example usage
-Check out a brief tutorial [here](https://github.com/jharlanr/sat-tile-stack/tree/main/notebooks/cc_tutorial.ipynb)
+Check out a brief tutorial [here](https://github.com/CryoInTheCloud/CryoCloudWebsite/blob/main/book/tutorials/dask_for_geoscientists.ipynb)
 
 
 ## How to Contribute
