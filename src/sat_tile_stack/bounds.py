@@ -112,3 +112,52 @@ def best_crs_for_point(lon, lat):
             f"+{'south' if is_south else 'north'} +datum=WGS84 +units=m +no_defs"
         )
         return pyproj.CRS.from_proj4(proj4)
+    
+    
+# FUNCTION TO COMPUTE PERCENTAGE OF NANS THAT ARE WITHIN A MASK FOR A GIVEN TILE
+def pctnanpix_inmask(timestack):
+    """
+    Computes the percentage of clouded and clear pixels over the region of interest (e.g., lake)
+
+    Parameters
+    ----------
+    timestack: (xarray.DataArray) DataArray with dimensions [time, band, y, x], including "mask" and RGB bands
+
+    Returns
+    -------
+    pct_nan : (float) percent of pixels inside region (e.g., lake) that are NaNs
+    """
+    lakemask_bool = timestack.sel(band="mask")==1 # shape [time, y, x]
+    total_pixels = lakemask_bool.sum(dim=["y", "x"]) # shape [time]
+    rgb_stack = timestack.sel(band=["B04","B03","B02"])
+    nan_mask = np.isnan(rgb_stack).all(dim="band")
+    nan_in_mask = nan_mask & lakemask_bool # shape [time, y, x]
+    nan_count = nan_in_mask.sum(dim=["y","x"])
+    pct_nan = nan_count/total_pixels
+
+    return pct_nan
+
+# FUNCTION TO COMPUTE PERCENTAGE OF CLOUDY PIXELS THAT ARE WITHIN A MASK FOR A GIVEN TILE
+def pctcloudypix_inmask(timestack):
+    """
+    Computes the percentage of clouded and clear pixels over the region of interest (e.g., lake)
+    Uses a given pixel-wise cloudmask, which can be generated in multiple ways (e.g., see utils.py)
+
+    Parameters
+    ----------
+    timestack : (xarray.DataArray) DataArray with dimensions [time, band, y, x], including "mask" and RGB bands
+
+    Returns
+    -------
+    pct_cloudy : (float) percent of pixels inside region (e.g., lake) that are cloud-covered
+    """
+    lakemask_bool = timestack.sel(band="mask")==1 # shape [time, y, x], 1s are inside the lake mask (region of interest)
+    cloudmask_bool = timestack.sel(band="cloudmask")==1 # shape: [time, y, x] (1s are cloudy pixels)
+    total_pixels = lakemask_bool.sum(dim=["y", "x"]) # shape [time]
+    cloudy_in_mask = cloudmask_bool & lakemask_bool # shape [time, y, x]
+    cloudy_count = cloudy_in_mask.sum(dim=["y","x"])
+    pct_cloudy = cloudy_count/total_pixels
+    
+    return pct_cloudy
+
+

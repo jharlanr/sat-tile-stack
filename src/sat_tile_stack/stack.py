@@ -37,8 +37,8 @@ from scipy.ndimage import binary_propagation
 from scipy.ndimage import label
 
 # imports from my package
-from .bounds import sat_mask_array, bounds_latlon_around, best_crs_for_point
-from .utils  import combo_scaler
+from .bounds import sat_mask_array, bounds_latlon_around, best_crs_for_point, pctnanpix_inmask, pctcloudypix_inmask
+from .utils  import combo_scaler, cloud_pix_mask
 
 
 ## ========= ##
@@ -53,6 +53,7 @@ def sattile_stack(catalog,
                   tile_size=1024,
                   time_range='2019-05-01/2019-09-30',
                   normalize=True,
+                  cloudmask=False,
                   mask=None,
                   pull_to_mem=False):
     """
@@ -173,12 +174,34 @@ def sattile_stack(catalog,
     pct_nans = (nan_counts / total) * 100
     timestack = timestack.assign_coords(pct_nans=('time', pct_nans.values))
     
-    # IF MASK, GENERATE AND APPEND MASK TO DATAARRAY
+    # IF DESIRED, COMPUTE A CLOUD MASK AND APPEND TO DATAARRAY
+    if cloudmask is True:
+        cloudmask = cloud_pix_mask(timestack, mask_method="Williamson2018b")  # [time, y, x]
+        # Add a band dimension to cloud_mask
+        cloudmask = cloudmask.expand_dims(dim={"band": ["cloudmask"]})  # [time, band=1, y, x]
+        # Align coords and concatenate along band dimension
+        timestack = xr.concat([timestack, cloudmask], dim="band")
+    else:
+        print(f"no cloudmask generation called")
+    
+    # IF THERE'S A REGION MASK, GENERATE AND APPEND MASK TO DATAARRAY
     if mask is not None:
         satmask = sat_mask_array(timestack, mask, feature_id=None)
         timestack = xr.concat([timestack, satmask], dim="band")
     else:
         print(f"no mask generation called")
+        
+    # TRACK PERCENT OF PIXELS WITHIN MASK THAT ARE NANS AND CLOUDY
+    if mask is not None:
+        # nans:  (note that this will place a 1 in the time vector if there is 100% NaNs within the lake area)
+        pct_nan = pctnanpix_inmask(timestack)
+        timestack = timestack.assign_coords(pctnanpix_inmask=("time", pct_nan.data))
+        # cloudiness: (note that this will place a 1 in the time vector if there is 100% cloudiness within the lake area)
+        # NOTE: this currently also places a 1 in the time vector if the image has NaNs inside the lake area
+        pct_cloudy = pctcloudypix_inmask(timestack)
+        timestack = timestack.assign_coords(pctcloudypix_inmask=("time", pct_cloudy.data))
+    else:
+        print(f"unable to produce pct_nans_inmask, pct_cloudy_inmask mask generation called")
         
     # CONVERT TO FLOAT32
     timestack = timestack.astype('float32')

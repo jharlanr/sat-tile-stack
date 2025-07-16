@@ -4,6 +4,33 @@ import numpy as np
 import warnings
 import json, numpy as np
 
+# FUNCTION TO COMPUTE A PIXEL-WISE CLOUD MASK
+def cloud_pix_mask(timestack, mask_method):
+    """
+    Computes a pixel-wise cloud mask over time.
+
+    Parameters
+    ----------
+    timestack : xarray.DataArray
+        Input data with shape [time, band, y, x]. Must include "B11" band.
+    mask_method : str
+        Currently supports only "Williamson2018b".
+
+    Returns
+    -------
+    cloud_mask : xarray.DataArray
+        Binary mask with shape [time, y, x]; 0 = clear, 1 = cloudy
+    """
+    if mask_method=="Williamson2018b":
+        timestack_swir1 = timestack.sel(band="B11") # shape: [time, y, x]
+        is_cloudy = (timestack_swir1/10000>0.140) | np.isnan(timestack_swir1)
+        mask_cloudypix = is_cloudy.astype("uint8") # clouds are a 1, clear pixels are a 0
+        mask_cloudypix.name = "cloudmask"
+    else:
+        print(f"invalid masking method selected, please select from one of the following: [Williamson2018b]")
+        
+    return mask_cloudypix
+
 
 # ## FUNCTION FOR NORMALIZING IMAGERY BEFORE STACKING
 # def combo_scaler(x, range_min=0.01, range_max=1.0, dtype=np.float32):
@@ -65,5 +92,6 @@ def combo_scaler(x, p2=75, p1=25, range_max=1):
 #         mn, mx = np.nanmin(robust), np.nanmax(robust)
 #         scaled = (robust - mn) / (mx - mn) * range_max
 #     return scaled
+
 
 
