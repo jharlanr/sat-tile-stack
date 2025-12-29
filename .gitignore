@@ -15,7 +15,7 @@ ENV/
 *.nc
 *.tif
 *.csv
-*.geojson
+#*.geojson
 
 .DS_Store
 
