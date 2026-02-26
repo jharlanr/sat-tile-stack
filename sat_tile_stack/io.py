@@ -1,6 +1,6 @@
 import xarray as xr
 import numpy as np
-import json, re, zarr, warnings
+import json, re, warnings
 
 ## HELPER FUNCTION to scrub attributes so they JSON-round-trip
 def scrub_attrs(xr_obj, drop=()):

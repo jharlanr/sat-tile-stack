@@ -35,4 +35,4 @@ dev = [
 ]
 
 [tool.setuptools]
-packages = ["sattilestack"]
+packages = ["sat_tile_stack"]

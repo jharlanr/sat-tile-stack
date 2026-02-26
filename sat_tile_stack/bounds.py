@@ -9,6 +9,7 @@ import math
 import numpy as np
 import pyproj
 import xarray as xr
+import rioxarray  # noqa: F401 — activates .rio accessor on xarray objects
 from rasterio.features import rasterize
 from shapely.geometry import box
 from shapely.ops import transform

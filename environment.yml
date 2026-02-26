@@ -1,0 +1,33 @@
+name: sat-tile-stack
+channels:
+  - conda-forge
+  - defaults
+dependencies:
+  - python>=3.9
+  # core scientific stack
+  - numpy
+  - pandas
+  - scipy
+  - xarray
+  - dask
+  - netcdf4
+  # geospatial
+  - geopandas
+  - rioxarray
+  - rasterio
+  - pyproj
+  - shapely
+  # plotting & movies
+  - matplotlib
+  - ffmpeg
+  # notebooks
+  - jupyterlab
+  - ipykernel
+  - tqdm
+  # pip-only packages
+  - pip
+  - pip:
+    - pystac-client
+    - planetary-computer
+    - stackstac
+    - -e .
