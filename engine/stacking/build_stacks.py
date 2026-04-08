@@ -82,6 +82,10 @@ def build_one_stack(task):
         return {"status": "skip", "id": lake_id}
 
     try:
+        # Suppress dask progress bar and print noise in batch mode
+        import io as _io
+        import sys as _sys
+
         catalog = pystac_client.Client.open(
             "https://planetarycomputer.microsoft.com/api/stac/v1",
             modifier=planetary_computer.sign_inplace,
@@ -89,17 +93,26 @@ def build_one_stack(task):
 
         cloudmask = args_dict["cloudmask"] if args_dict["cloudmask"] != "none" else False
 
-        stack = sattile_stack(
-            catalog, (lon, lat),
-            band_names=args_dict["bands"],
-            collection=args_dict["collection"],
-            pix_res=args_dict["pix_res"],
-            tile_size=args_dict["tile_size"],
-            time_range=args_dict["time_range"],
-            normalize=False,
-            cloudmask=cloudmask,
-            pull_to_mem=True,
-        )
+        # Build stack — suppress dask progress bar and print noise
+        _old_stdout, _old_stderr = _sys.stdout, _sys.stderr
+        _sys.stdout = _io.StringIO()
+        _sys.stderr = _io.StringIO()
+        try:
+            stack = sattile_stack(
+                catalog, (lon, lat),
+                band_names=args_dict["bands"],
+                collection=args_dict["collection"],
+                pix_res=args_dict["pix_res"],
+                tile_size=args_dict["tile_size"],
+                time_range=args_dict["time_range"],
+                normalize=False,
+                cloudmask=cloudmask,
+                pull_to_mem=True,
+            )
+        finally:
+            _sys.stdout = _old_stdout
+            _sys.stderr = _old_stderr
+
         write_netcdf_from_da(stack, str(outfile))
         return {"status": "ok", "id": lake_id}
 
