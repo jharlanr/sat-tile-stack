@@ -73,51 +73,87 @@ def parse_args():
     return parser.parse_args()
 
 
+MAX_RETRIES = 3
+RETRY_DELAY = 10  # seconds
+
+
+def _validate_nc(filepath, expected_tile_size):
+    """Quick check if an existing .nc file is complete. Only reads metadata, not data."""
+    try:
+        import xarray as xr
+        ds = xr.open_dataset(str(filepath))
+        if "reflectance" not in ds:
+            ds.close()
+            return False
+        da = ds["reflectance"]
+        if da.sizes.get("time", 0) == 0:
+            ds.close()
+            return False
+        if da.sizes.get("y", 0) < expected_tile_size or da.sizes.get("x", 0) < expected_tile_size:
+            ds.close()
+            return False
+        if "band" not in ds.coords:
+            ds.close()
+            return False
+        ds.close()
+        return True
+    except Exception:
+        return False
+
+
 def build_one_stack(task):
-    """Build a single .nc timestack. Designed for multiprocessing.Pool."""
+    """Build a single .nc timestack with retry logic. Designed for multiprocessing.Pool."""
+    import io as _io
+    import sys as _sys
+    import time as _time
+
     lake_id, lon, lat, args_dict = task
     outfile = Path(args_dict["output_dir"]) / f"{lake_id}.nc"
 
+    # Check if file exists AND is valid
     if outfile.exists():
-        return {"status": "skip", "id": lake_id}
+        if _validate_nc(outfile, args_dict["tile_size"]):
+            return {"status": "skip", "id": lake_id}
+        else:
+            outfile.unlink()  # corrupted/incomplete — delete and rebuild
 
-    try:
-        # Suppress dask progress bar and print noise in batch mode
-        import io as _io
-        import sys as _sys
+    cloudmask = args_dict["cloudmask"] if args_dict["cloudmask"] != "none" else False
 
-        catalog = pystac_client.Client.open(
-            "https://planetarycomputer.microsoft.com/api/stac/v1",
-            modifier=planetary_computer.sign_inplace,
-        )
-
-        cloudmask = args_dict["cloudmask"] if args_dict["cloudmask"] != "none" else False
-
-        # Build stack — suppress dask progress bar and print noise
-        _old_stdout, _old_stderr = _sys.stdout, _sys.stderr
-        _sys.stdout = _io.StringIO()
-        _sys.stderr = _io.StringIO()
+    for attempt in range(MAX_RETRIES):
         try:
-            stack = sattile_stack(
-                catalog, (lon, lat),
-                band_names=args_dict["bands"],
-                collection=args_dict["collection"],
-                pix_res=args_dict["pix_res"],
-                tile_size=args_dict["tile_size"],
-                time_range=args_dict["time_range"],
-                normalize=False,
-                cloudmask=cloudmask,
-                pull_to_mem=True,
+            catalog = pystac_client.Client.open(
+                "https://planetarycomputer.microsoft.com/api/stac/v1",
+                modifier=planetary_computer.sign_inplace,
             )
-        finally:
-            _sys.stdout = _old_stdout
-            _sys.stderr = _old_stderr
 
-        write_netcdf_from_da(stack, str(outfile))
-        return {"status": "ok", "id": lake_id}
+            # Suppress dask progress bar and print noise
+            _old_stdout, _old_stderr = _sys.stdout, _sys.stderr
+            _sys.stdout = _io.StringIO()
+            _sys.stderr = _io.StringIO()
+            try:
+                stack = sattile_stack(
+                    catalog, (lon, lat),
+                    band_names=args_dict["bands"],
+                    collection=args_dict["collection"],
+                    pix_res=args_dict["pix_res"],
+                    tile_size=args_dict["tile_size"],
+                    time_range=args_dict["time_range"],
+                    normalize=False,
+                    cloudmask=cloudmask,
+                    pull_to_mem=True,
+                )
+            finally:
+                _sys.stdout = _old_stdout
+                _sys.stderr = _old_stderr
 
-    except Exception as e:
-        return {"status": "error", "id": lake_id, "error": str(e)}
+            write_netcdf_from_da(stack, str(outfile))
+            return {"status": "ok", "id": lake_id}
+
+        except Exception as e:
+            if attempt < MAX_RETRIES - 1:
+                _time.sleep(RETRY_DELAY * (attempt + 1))  # backoff: 10s, 20s, 30s
+                continue
+            return {"status": "error", "id": lake_id, "error": str(e)}
 
 
 def main():

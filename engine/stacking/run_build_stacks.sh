@@ -98,7 +98,7 @@ python3 -u "$REPO_DIR/engine/stacking/build_stacks.py" \
     --pix_res 10 \
     --tile_size 512 \
     --cloudmask scl \
-    --workers 32
+    --workers 8
 
 EXIT_CODE=$?
 
