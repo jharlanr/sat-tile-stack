@@ -154,25 +154,31 @@ def best_crs_for_point(lon, lat):
         return pyproj.CRS.from_proj4(proj4)
 
 
-def pctnanpix_inmask(timestack):
+def pctnanpix_inmask(timestack, check_bands=None):
     """
     Compute percentage of NaN pixels within a mask for each timestep.
 
     Parameters
     ----------
     timestack : xarray.DataArray
-        DataArray with dimensions [time, band, y, x], must include "mask"
-        and RGB bands (B04, B03, B02).
+        DataArray with dimensions [time, band, y, x], must include "mask" band.
+    check_bands : list of str, optional
+        Bands to check for NaN. If None, uses all bands except "mask" and
+        "cloudmask". A pixel is counted as NaN if all check_bands are NaN.
 
     Returns
     -------
     pct_nan : xarray.DataArray
         Percentage (0-1) of pixels inside mask that are NaN for each timestep.
     """
+    if check_bands is None:
+        check_bands = [b for b in timestack.band.values
+                       if b not in ("mask", "cloudmask")]
+
     lakemask_bool = timestack.sel(band="mask") == 1  # shape [time, y, x]
     total_pixels = lakemask_bool.sum(dim=["y", "x"])  # shape [time]
-    rgb_stack = timestack.sel(band=["B04", "B03", "B02"])
-    nan_mask = np.isnan(rgb_stack).all(dim="band")
+    check_stack = timestack.sel(band=check_bands)
+    nan_mask = np.isnan(check_stack).all(dim="band")
     nan_in_mask = nan_mask & lakemask_bool  # shape [time, y, x]
     nan_count = nan_in_mask.sum(dim=["y", "x"])
     pct_nan = nan_count / total_pixels

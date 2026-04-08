@@ -25,3 +25,12 @@ ENV/
 *.egg-info
 
 output/
+
+claudiary/
+
+labeling/test_stacks/
+labeling/labels/
+labeling/stacks/
+labeling/lookups/
+labeling/*/stacks/
+labeling/*/labels_*.csv

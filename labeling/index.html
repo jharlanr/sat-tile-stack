@@ -1,0 +1,699 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>sat-tile-stack Labeler</title>
+<style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+        background: #111; color: #eee; font-family: -apple-system, sans-serif;
+        height: 100vh; overflow: hidden; display: flex; flex-direction: column;
+    }
+
+    /* Top bar */
+    #topbar {
+        display: flex; align-items: center; justify-content: space-between;
+        padding: 6px 16px; background: #1a1a1a; border-bottom: 1px solid #333;
+        font-size: 13px; flex-shrink: 0;
+    }
+    #topbar .id { font-weight: bold; font-size: 15px; }
+    #topbar .progress { color: #888; }
+    #progress-bar {
+        width: 150px; height: 8px; background: #333; border-radius: 4px;
+        overflow: hidden; display: inline-block; vertical-align: middle; margin: 0 8px;
+    }
+    #progress-fill { height: 100%; background: #4488cc; transition: width 0.3s; }
+
+    /* Main content */
+    #main { display: flex; flex: 1; overflow: hidden; }
+
+    /* Left: image + slider */
+    #left-panel {
+        flex: 3; display: flex; flex-direction: column; align-items: center;
+        padding: 8px; min-width: 0;
+    }
+    #image-container {
+        flex: 1; display: flex; align-items: center; justify-content: center;
+        cursor: grab; position: relative; min-height: 0;
+    }
+    #main-image {
+        max-height: 100%; max-width: 100%; object-fit: contain;
+        user-select: none; -webkit-user-drag: none;
+    }
+    #date-label {
+        font-size: 13px; color: #aaa; margin: 4px 0; text-align: center;
+    }
+    #frame-slider-container {
+        width: 100%; padding: 0 10px; flex-shrink: 0;
+    }
+    #frame-slider {
+        width: 100%; accent-color: #4488cc; cursor: pointer;
+    }
+
+    /* Right: controls */
+    #right-panel {
+        width: 260px; flex-shrink: 0; padding: 10px 14px;
+        background: #1a1a1a; border-left: 1px solid #333;
+        display: flex; flex-direction: column; overflow-y: auto;
+    }
+
+    /* Prob sliders */
+    .prob-row {
+        display: flex; align-items: center; margin: 3px 0; font-size: 12px;
+    }
+    .prob-label { width: 32px; font-weight: bold; text-align: right; margin-right: 8px; }
+    .prob-slider-wrap {
+        flex: 1; position: relative; height: 24px; display: flex; align-items: center;
+    }
+    .prob-slider {
+        width: 100%; accent-color: #4488cc; position: relative; z-index: 2;
+        background: transparent; margin: 0;
+    }
+    .prob-ticks {
+        position: absolute; bottom: 1px; left: 7px; right: 7px; height: 6px;
+        display: flex; justify-content: space-between; align-items: center;
+        pointer-events: none; z-index: 1;
+    }
+    .prob-tick {
+        width: 6px; height: 6px; border-radius: 50%; background: #666;
+        border: 1px solid #888;
+    }
+    .prob-value { width: 36px; text-align: center; color: #aaa; font-size: 11px; }
+
+    #label-display {
+        text-align: center; font-size: 16px; font-weight: bold;
+        color: #33ff33; margin: 6px 0; min-height: 22px;
+    }
+    #prob-warning { text-align: center; font-size: 11px; color: #ff8800; min-height: 16px; }
+
+    /* Notes */
+    #notes-input {
+        width: 100%; background: #222; border: 1px solid #444; color: #eee;
+        padding: 4px 8px; border-radius: 4px; font-size: 12px; margin: 4px 0;
+    }
+
+    /* Buttons */
+    .btn-row { display: flex; gap: 6px; margin: 4px 0; }
+    .btn {
+        flex: 1; padding: 8px; border: none; border-radius: 4px;
+        cursor: pointer; font-size: 12px; font-weight: bold; color: white;
+    }
+    .btn-submit { background: #228833; }
+    .btn-submit:hover { background: #33aa44; }
+    .btn-submit:disabled { background: #555; cursor: not-allowed; }
+    .btn-skip { background: #aa7700; }
+    .btn-skip:hover { background: #cc9900; }
+    .btn-back { background: #555; }
+    .btn-back:hover { background: #777; }
+    .btn-flag { background: #664; border: 1px solid #886; }
+    .btn-flag:hover { background: #886; }
+    .btn-flag.flagged { background: #a63; border-color: #c84; }
+
+    /* Pie chart */
+    #pie-container { text-align: center; margin: 6px 0; }
+    #pie-container canvas { max-width: 220px; max-height: 220px; }
+
+    .section-label { font-size: 11px; color: #666; margin: 8px 0 2px; text-transform: uppercase; }
+
+    /* Sample list */
+    .sample-item {
+        padding: 2px 6px; cursor: pointer; border-radius: 3px;
+        white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    }
+    .sample-item:hover { background: #333; }
+    .sample-item.active { background: #2a4a6a; font-weight: bold; }
+    .sample-item .flag-dot { color: #c84; margin-right: 4px; }
+</style>
+</head>
+<body>
+
+<!-- Top bar -->
+<div id="topbar">
+    <div>
+        <span class="id" id="lake-id">—</span>
+        <span style="color:#666; margin-left:12px;" id="sample-counter">0/0</span>
+    </div>
+    <div class="progress">
+        <span id="labeled-count">0</span>/<span id="total-count">0</span> labeled
+        <div id="progress-bar"><div id="progress-fill" style="width:0%"></div></div>
+        <span id="remaining-count">0</span> remaining
+    </div>
+</div>
+
+<!-- Main content -->
+<div id="main">
+    <!-- Left: image -->
+    <div id="left-panel">
+        <div id="image-container">
+            <img id="main-image" src="" alt="" />
+            <div id="image-placeholder" style="
+                position:absolute; top:0; left:0; right:0; bottom:0;
+                display:flex; align-items:center; justify-content:center;
+                flex-direction:column; gap:12px; text-align:center;">
+                <div style="font-size:36px;">✓</div>
+                <div style="color:#888; font-size:15px;">All samples labeled</div>
+                <div style="color:#555; font-size:12px;">Select a sample from the list to review or re-label</div>
+            </div>
+        </div>
+        <div id="date-label" style="font-size:18px; color:#ddd; font-weight:bold; margin:6px 0;">—</div>
+        <div id="frame-slider-container">
+            <input type="range" id="frame-slider" min="0" max="0" value="0" />
+        </div>
+    </div>
+
+    <!-- Right: controls -->
+    <div id="right-panel">
+        <div class="section-label" style="display:flex; justify-content:space-between; align-items:center;">
+            Class probabilities
+            <span id="help-btn" onclick="document.getElementById('help-modal').style.display='flex'"
+                  style="cursor:pointer; font-size:14px; color:#4488cc; text-transform:none;"
+                  title="Labeling guidelines">? Guide</span>
+        </div>
+        <div id="prob-sliders"></div>
+        <div id="prob-warning"></div>
+        <div id="label-display">—</div>
+
+        <div class="section-label">Notes</div>
+        <input type="text" id="notes-input" placeholder="Notes..." />
+
+        <div class="btn-row" style="margin-top:8px;">
+            <button class="btn btn-back" id="btn-back" onclick="goBack()">← Back</button>
+            <button class="btn btn-skip" id="btn-skip" onclick="goSkip()">Skip →</button>
+        </div>
+        <div class="btn-row">
+            <button class="btn btn-submit" id="btn-submit" onclick="submitLabel()" disabled>
+                ✓ Submit & Next
+            </button>
+        </div>
+        <div class="btn-row">
+            <button class="btn btn-flag" id="btn-flag" onclick="toggleFlag()">
+                🚩 Flag for revisit
+            </button>
+        </div>
+
+        <div class="section-label" style="margin-top:12px;">Distribution</div>
+        <div id="pie-container">
+            <canvas id="pie-canvas" width="160" height="160"></canvas>
+        </div>
+
+        <div class="section-label" style="margin-top:8px;">Sample list</div>
+        <select id="list-filter" onchange="updateSampleList()" style="
+            width:100%; background:#222; color:#eee; border:1px solid #444;
+            border-radius:4px; padding:3px 6px; font-size:11px; margin-bottom:4px;">
+            <option value="unlabeled">To be labeled</option>
+            <option value="labeled">Labeled</option>
+            <option value="flagged">Flagged for revisit</option>
+        </select>
+        <div id="sample-list" style="
+            max-height:150px; overflow-y:auto; font-size:11px;
+            border:1px solid #333; border-radius:4px; padding:2px;">
+        </div>
+    </div>
+</div>
+
+<!-- Help modal -->
+<div id="help-modal" style="
+    display:none; position:fixed; top:0; left:0; right:0; bottom:0;
+    background:rgba(0,0,0,0.8); z-index:100;
+    align-items:center; justify-content:center;"
+    onclick="if(event.target===this) this.style.display='none'">
+    <div style="
+        background:#222; border:1px solid #444; border-radius:8px;
+        padding:24px 32px; max-width:550px; max-height:80vh; overflow-y:auto;
+        color:#ddd; font-size:13px; line-height:1.6;">
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:16px;">
+            <h2 style="margin:0; font-size:18px; color:white;">Labeling Guidelines</h2>
+            <span onclick="document.getElementById('help-modal').style.display='none'"
+                  style="cursor:pointer; font-size:20px; color:#888;">✕</span>
+        </div>
+
+        <p>Assign probability estimates for each drainage class. Probabilities must sum to 1.0.
+        The label is automatically set to the class with the highest probability (argmax).</p>
+
+        <h3 style="color:#4488cc; margin:12px 0 6px;">Classes</h3>
+
+        <p><strong>ND — No Drainage</strong><br>
+        <!-- TODO: Add description of what ND looks like in the imagery -->
+        Lake persists throughout the observation period with no significant drainage event.</p>
+
+        <p><strong>HF — Hydrofracture</strong><br>
+        <!-- TODO: Add description and visual cues -->
+        Rapid drainage through fractures in the ice. Look for: sudden area decrease, crevasse patterns.</p>
+
+        <p><strong>MD — Moulin Drainage</strong><br>
+        <!-- TODO: Add description and visual cues -->
+        Drainage through a moulin (vertical channel). Look for: gradual area decrease, possible channel visible.</p>
+
+        <p><strong>LD — Lateral Drainage</strong><br>
+        <!-- TODO: Add description and visual cues -->
+        Water flows horizontally to adjacent area. Look for: directional water movement, channel formation.</p>
+
+        <p><strong>CD — Crevasse Drainage</strong><br>
+        <!-- TODO: Add description and visual cues -->
+        Water escapes through crevasse fields. Look for: crevasse patterns near lake, rapid drainage.</p>
+
+        <h3 style="color:#4488cc; margin:12px 0 6px;">Tips</h3>
+        <ul style="padding-left:20px;">
+            <li>Scrub through all frames to see the full temporal evolution</li>
+            <li>Pay attention to the rate of area change (sudden vs gradual)</li>
+            <li>Use probability splits (e.g., 0.50/0.50) when uncertain between two classes</li>
+            <li>Flag ambiguous cases for revisit</li>
+            <li>Use the notes field to record observations</li>
+        </ul>
+
+        <h3 style="color:#4488cc; margin:12px 0 6px;">Controls</h3>
+        <ul style="padding-left:20px;">
+            <li><strong>Scroll wheel</strong> over image — scrub frames</li>
+            <li><strong>← →</strong> arrow keys — scrub frames</li>
+            <li><strong>Enter</strong> — submit & next</li>
+        </ul>
+    </div>
+</div>
+
+<script>
+// ---------------------------------------------------------------------------
+// State
+// ---------------------------------------------------------------------------
+let samples = [];
+let unlabeledIds = [];
+let currentIdx = 0;
+let currentId = "";
+let currentInfo = null;
+let frameIdx = 0;
+let classes = [];
+let probs = {};
+
+// ---------------------------------------------------------------------------
+// Init
+// ---------------------------------------------------------------------------
+async function init() {
+    const progressData = await fetch("/api/progress").then(r => r.json());
+    classes = progressData.classes;
+    buildProbSliders();
+    updateProgress(progressData);
+
+    samples = await fetch("/api/samples").then(r => r.json());
+    unlabeledIds = samples.filter(s => !s.labeled).map(s => s.id);
+
+    if (unlabeledIds.length === 0) {
+        document.getElementById("lake-id").textContent = "All labeled!";
+        showAllDone();
+        return;
+    }
+
+    loadSample(0);
+    updateSampleList();
+}
+
+// ---------------------------------------------------------------------------
+// Prob sliders
+// ---------------------------------------------------------------------------
+function buildProbSliders() {
+    const container = document.getElementById("prob-sliders");
+    container.innerHTML = "";
+    classes.forEach(cn => {
+        probs[cn] = 0;
+        const row = document.createElement("div");
+        row.className = "prob-row";
+        row.innerHTML = `
+            <span class="prob-label">${cn}</span>
+            <div class="prob-slider-wrap">
+                <input type="range" class="prob-slider" id="prob-${cn}"
+                       min="0" max="1" step="0.25" value="0"
+                       oninput="onProbChange('${cn}', this.value)" />
+                <div class="prob-ticks">
+                    <div class="prob-tick"></div>
+                    <div class="prob-tick"></div>
+                    <div class="prob-tick"></div>
+                    <div class="prob-tick"></div>
+                    <div class="prob-tick"></div>
+                </div>
+            </div>
+            <span class="prob-value" id="prob-val-${cn}">0</span>
+        `;
+        container.appendChild(row);
+    });
+}
+
+function onProbChange(cn, val) {
+    val = parseFloat(val);
+    probs[cn] = val;
+
+    // Clamp: if total > 1, pull this slider back
+    let total = Object.values(probs).reduce((a, b) => a + b, 0);
+    if (total > 1.001) {
+        const excess = total - 1.0;
+        probs[cn] = Math.max(0, Math.round((val - excess) / 0.25) * 0.25);
+        document.getElementById(`prob-${cn}`).value = probs[cn];
+    }
+
+    // Update display
+    total = Object.values(probs).reduce((a, b) => a + b, 0);
+    document.getElementById(`prob-val-${cn}`).textContent = probs[cn].toFixed(2);
+
+    const warn = document.getElementById("prob-warning");
+    const labelDisp = document.getElementById("label-display");
+    const submitBtn = document.getElementById("btn-submit");
+
+    if (Math.abs(total - 1.0) < 0.01 && Math.max(...Object.values(probs)) > 0) {
+        const argmax = Object.keys(probs).reduce((a, b) => probs[a] > probs[b] ? a : b);
+        labelDisp.textContent = argmax;
+        warn.textContent = "";
+        submitBtn.disabled = false;
+    } else if (total > 0) {
+        labelDisp.textContent = "—";
+        warn.textContent = `Sum: ${total.toFixed(2)} (need 1.00)`;
+        submitBtn.disabled = true;
+    } else {
+        labelDisp.textContent = "—";
+        warn.textContent = "";
+        submitBtn.disabled = true;
+    }
+}
+
+function resetProbs() {
+    classes.forEach(cn => {
+        probs[cn] = 0;
+        document.getElementById(`prob-${cn}`).value = 0;
+        document.getElementById(`prob-val-${cn}`).textContent = "0";
+    });
+    document.getElementById("label-display").textContent = "—";
+    document.getElementById("prob-warning").textContent = "";
+    document.getElementById("btn-submit").disabled = true;
+    document.getElementById("notes-input").value = "";
+    document.getElementById("btn-flag").classList.remove("flagged");
+}
+
+function showAllDone() {
+    currentId = "";  // clear current sample
+    document.getElementById("btn-skip").disabled = true;
+    document.getElementById("btn-back").disabled = true;
+    document.getElementById("btn-submit").disabled = true;
+    document.getElementById("main-image").src = "";
+    document.getElementById("image-placeholder").style.display = "block";
+    document.getElementById("date-label").textContent = "";
+    document.getElementById("sample-counter").textContent = "";
+    document.getElementById("frame-slider").disabled = true;
+    // Switch list filter to "Labeled" so user can pick one to revisit
+    document.getElementById("list-filter").value = "labeled";
+    updateSampleList();
+}
+
+// ---------------------------------------------------------------------------
+// Sample loading
+// ---------------------------------------------------------------------------
+async function loadSample(idx) {
+    if (idx < 0 || idx >= unlabeledIds.length) return;
+    currentIdx = idx;
+    currentId = unlabeledIds[idx];
+
+    document.getElementById("lake-id").textContent = currentId;
+    document.getElementById("sample-counter").textContent =
+        `${idx + 1}/${unlabeledIds.length} unlabeled`;
+
+    await _loadAndDisplay(currentId);
+}
+
+async function _loadAndDisplay(id) {
+    currentInfo = await fetch(`/api/info/${id}`).then(r => r.json());
+
+    // Re-enable controls (may have been disabled by showAllDone)
+    document.getElementById("frame-slider").disabled = false;
+    document.getElementById("image-placeholder").style.display = "none";
+
+    // Reset frame slider
+    const slider = document.getElementById("frame-slider");
+    slider.max = currentInfo.n_frames - 1;
+    slider.value = 0;
+    frameIdx = 0;
+
+    resetProbs();
+    loadFrame(0);
+
+    // Load existing label if any
+    const labelData = await fetch(`/api/label/${id}`).then(r => r.json());
+    if (labelData.labeled) {
+        // Restore probabilities
+        classes.forEach(cn => {
+            const p = labelData.probs[cn] || 0;
+            probs[cn] = p;
+            document.getElementById(`prob-${cn}`).value = p;
+            document.getElementById(`prob-val-${cn}`).textContent = p.toFixed(2);
+        });
+        // Restore notes
+        document.getElementById("notes-input").value = labelData.notes || "";
+        // Update argmax display
+        const total = Object.values(probs).reduce((a, b) => a + b, 0);
+        if (Math.abs(total - 1.0) < 0.01 && Math.max(...Object.values(probs)) > 0) {
+            const argmax = Object.keys(probs).reduce((a, b) => probs[a] > probs[b] ? a : b);
+            document.getElementById("label-display").textContent = argmax;
+            document.getElementById("btn-submit").disabled = false;
+        }
+    }
+
+    // Check if flagged
+    if (labelData.flagged) {
+        document.getElementById("btn-flag").classList.add("flagged");
+    }
+}
+
+function loadFrame(idx) {
+    frameIdx = idx;
+    const img = document.getElementById("main-image");
+    img.src = `/api/frame/${currentId}/${idx}?t=${Date.now()}`;
+    document.getElementById("image-placeholder").style.display = "none";
+
+    const dateLabel = document.getElementById("date-label");
+    if (currentInfo) {
+        dateLabel.textContent =
+            `${currentInfo.dates[idx]}  |  frame ${idx + 1}/${currentInfo.n_frames}`;
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Frame slider + scroll
+// ---------------------------------------------------------------------------
+document.getElementById("frame-slider").addEventListener("input", function () {
+    loadFrame(parseInt(this.value));
+});
+
+// Throttled scroll-to-scrub — one frame per 150ms max (trackpad-friendly)
+let lastScrollTime = 0;
+document.getElementById("image-container").addEventListener("wheel", function (e) {
+    e.preventDefault();
+    const now = Date.now();
+    if (now - lastScrollTime < 150) return;  // throttle
+    lastScrollTime = now;
+
+    const delta = e.deltaY > 0 ? 1 : -1;
+    const maxFrame = currentInfo ? currentInfo.n_frames - 1 : 0;
+    const newIdx = Math.max(0, Math.min(maxFrame, frameIdx + delta));
+    if (newIdx !== frameIdx) {
+        frameIdx = newIdx;
+        document.getElementById("frame-slider").value = newIdx;
+        loadFrame(newIdx);
+    }
+}, { passive: false });
+
+// Arrow keys
+document.addEventListener("keydown", function (e) {
+    // Don't capture if typing in notes
+    if (document.activeElement === document.getElementById("notes-input")) return;
+
+    if (e.key === "ArrowRight") {
+        e.preventDefault();
+        const max = currentInfo ? currentInfo.n_frames - 1 : 0;
+        const newIdx = Math.min(frameIdx + 1, max);
+        document.getElementById("frame-slider").value = newIdx;
+        loadFrame(newIdx);
+    } else if (e.key === "ArrowLeft") {
+        e.preventDefault();
+        const newIdx = Math.max(0, frameIdx - 1);
+        document.getElementById("frame-slider").value = newIdx;
+        loadFrame(newIdx);
+    } else if (e.key === "Enter") {
+        e.preventDefault();
+        submitLabel();
+    }
+});
+
+// ---------------------------------------------------------------------------
+// Actions
+// ---------------------------------------------------------------------------
+async function submitLabel() {
+    if (!currentId) return;  // no sample loaded
+    const total = Object.values(probs).reduce((a, b) => a + b, 0);
+    if (Math.abs(total - 1.0) > 0.01) return;
+
+    const notes = document.getElementById("notes-input").value;
+    const flagged = document.getElementById("btn-flag").classList.contains("flagged");
+
+    await fetch("/api/label", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ lake_id: currentId, probs, notes, flagged }),
+    });
+
+    // Refresh
+    samples = await fetch("/api/samples").then(r => r.json());
+    unlabeledIds = samples.filter(s => !s.labeled).map(s => s.id);
+
+    const progressData = await fetch("/api/progress").then(r => r.json());
+    updateProgress(progressData);
+
+    if (unlabeledIds.length === 0) {
+        document.getElementById("lake-id").textContent = "All labeled!";
+        showAllDone();
+        return;
+    }
+
+    // Stay at same index (next unlabeled slides in)
+    if (currentIdx >= unlabeledIds.length) {
+        currentIdx = unlabeledIds.length - 1;
+    }
+    loadSample(currentIdx);
+    updateSampleList();
+}
+
+function goSkip() {
+    const next = Math.min(currentIdx + 1, unlabeledIds.length - 1);
+    loadSample(next);
+    updateSampleList();
+}
+
+function goBack() {
+    const prev = Math.max(0, currentIdx - 1);
+    loadSample(prev);
+    updateSampleList();
+}
+
+async function toggleFlag() {
+    await fetch("/api/flag", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ lake_id: currentId }),
+    });
+    document.getElementById("btn-flag").classList.toggle("flagged");
+    // Refresh samples list to reflect flag change
+    samples = await fetch("/api/samples").then(r => r.json());
+    updateSampleList();
+}
+
+// ---------------------------------------------------------------------------
+// Progress + pie chart
+// ---------------------------------------------------------------------------
+function updateProgress(data) {
+    document.getElementById("labeled-count").textContent = data.labeled;
+    document.getElementById("total-count").textContent = data.total;
+    document.getElementById("remaining-count").textContent = data.remaining;
+    const pct = data.total > 0 ? (data.labeled / data.total * 100) : 0;
+    document.getElementById("progress-fill").style.width = pct + "%";
+    drawPie(data.classes, data.counts);
+}
+
+function drawPie(classNames, counts) {
+    const canvas = document.getElementById("pie-canvas");
+    const ctx = canvas.getContext("2d");
+    // HiDPI: render at 2x, display at 1x for sharp text
+    const dpr = window.devicePixelRatio || 1;
+    const size = 220;
+    canvas.width = size * dpr;
+    canvas.height = size * dpr;
+    canvas.style.width = size + "px";
+    canvas.style.height = size + "px";
+    ctx.scale(dpr, dpr);
+    ctx.clearRect(0, 0, size, size);
+
+    const total = Object.values(counts).reduce((a, b) => a + b, 0);
+    if (total === 0) {
+        ctx.fillStyle = "#666";
+        ctx.font = "12px sans-serif";
+        ctx.textAlign = "center";
+        ctx.fillText("No labels yet", 110, 110);
+        return;
+    }
+
+    const colors = ["#4488cc", "#cc4444", "#44aa44", "#ccaa44", "#aa44cc", "#44cccc"];
+    let startAngle = -Math.PI / 2;
+    const cx = 110, cy = 110, r = 55;
+
+    classNames.forEach((cn, i) => {
+        const count = counts[cn] || 0;
+        if (count === 0) return;
+        const pct = Math.round(count / total * 100);
+        const slice = (count / total) * 2 * Math.PI;
+
+        ctx.beginPath();
+        ctx.moveTo(cx, cy);
+        ctx.arc(cx, cy, r, startAngle, startAngle + slice);
+        ctx.fillStyle = colors[i % colors.length];
+        ctx.fill();
+
+        // Label with count and percentage
+        const mid = startAngle + slice / 2;
+        const lx = cx + (r + 18) * Math.cos(mid);
+        const ly = cy + (r + 18) * Math.sin(mid);
+        ctx.fillStyle = "#ccc";
+        ctx.font = "10px sans-serif";
+        ctx.textAlign = "center";
+        ctx.fillText(`${cn}(${count}) ${pct}%`, lx, ly);
+
+        startAngle += slice;
+    });
+}
+
+// ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// Sample list
+// ---------------------------------------------------------------------------
+function updateSampleList() {
+    const filter = document.getElementById("list-filter").value;
+    const container = document.getElementById("sample-list");
+    container.innerHTML = "";
+
+    let filtered = [];
+    if (filter === "unlabeled") {
+        filtered = samples.filter(s => !s.labeled);
+    } else if (filter === "labeled") {
+        filtered = samples.filter(s => s.labeled);
+    } else if (filter === "flagged") {
+        filtered = samples.filter(s => s.flagged);
+    }
+
+    if (filtered.length === 0) {
+        container.innerHTML = '<div style="color:#666; padding:4px;">None</div>';
+        return;
+    }
+
+    filtered.forEach(s => {
+        const div = document.createElement("div");
+        div.className = "sample-item" + (s.id === currentId ? " active" : "");
+        const flag = s.flagged ? '<span class="flag-dot">🚩</span>' : "";
+        div.innerHTML = flag + s.id;
+        div.onclick = () => jumpToSample(s.id);
+        container.appendChild(div);
+    });
+}
+
+async function jumpToSample(id) {
+    // Find in unlabeled list first
+    let idx = unlabeledIds.indexOf(id);
+    if (idx >= 0) {
+        loadSample(idx);
+        updateSampleList();
+        return;
+    }
+    // If it's a labeled sample, load it directly for review
+    currentId = id;
+    document.getElementById("lake-id").textContent = id;
+    document.getElementById("sample-counter").textContent = "(reviewing)";
+    await _loadAndDisplay(id);
+    updateSampleList();
+}
+
+// Go
+// ---------------------------------------------------------------------------
+init();
+</script>
+</body>
+</html>

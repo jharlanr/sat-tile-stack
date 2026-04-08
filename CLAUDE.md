@@ -51,6 +51,15 @@ sattilestack/
 - Robust IQR-based normalization: (x - median) / IQR
 - Then scaled to [0, range_max]
 
+## Satellite Product Reference
+
+The `pix_res` parameter controls output resolution. Setting it below native resolution
+interpolates (no new information); above native downsamples.
+
+**Sentinel-2 L2A** (`sentinel-2-l2a`): 10m bands (B02/B03/B04/B08), 20m bands (B05/B06/B07/B8A/B11/B12/SCL), 60m (B09). Reflectance scaled by 10000.
+**Sentinel-1 GRD IW** (`sentinel-1-grd`): 10m pixel spacing but ~20m true resolution (oversampled). VV/VH or HH/HV. Backscatter in dB. No `eo:cloud_cover` — use `query={}`. Cloud-penetrating (no cloud mask needed).
+**Landsat 8/9 C2** (`landsat-c2-l2`): 30m (SR_B1–SR_B7), 100m thermal (ST_B10). Scale=0.0000275, offset=-0.2. 16-day revisit.
+
 ## Commands
 
 Install the package in development mode:

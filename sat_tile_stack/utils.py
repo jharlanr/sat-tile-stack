@@ -7,16 +7,24 @@ Provides normalization and cloud masking utilities.
 import numpy as np
 
 
-def cloud_pix_mask(timestack, mask_method):
+CLOUD_METHODS = ["williamson", "scl"]
+
+
+def cloud_pix_mask(timestack, method="williamson"):
     """
     Compute a pixel-wise cloud mask over time.
 
     Parameters
     ----------
     timestack : xarray.DataArray
-        Input data with shape [time, band, y, x]. Must include "B11" band.
-    mask_method : str
-        Masking method to use. Currently supports only "Williamson2018b".
+        Input data with shape [time, band, y, x].
+    method : str
+        Masking method to use:
+        - 'williamson': SWIR1 threshold (Williamson2018b). Requires 'B11' band.
+          Flags pixels where B11/10000 > 0.140 or B11 is NaN.
+        - 'scl': Sentinel-2 Scene Classification Layer. Requires 'SCL' band.
+          Flags cloud shadow (3), cloud medium prob (8), cloud high prob (9),
+          and thin cirrus (10).
 
     Returns
     -------
@@ -26,19 +34,31 @@ def cloud_pix_mask(timestack, mask_method):
     Raises
     ------
     ValueError
-        If an invalid mask_method is provided.
+        If an invalid method is provided or required bands are missing.
     """
-    if mask_method == "Williamson2018b":
-        timestack_swir1 = timestack.sel(band="B11")  # shape: [time, y, x]
-        is_cloudy = (timestack_swir1 / 10000 > 0.140) | np.isnan(timestack_swir1)
-        mask_cloudypix = is_cloudy.astype("uint8")
-        mask_cloudypix.name = "cloudmask"
-        return mask_cloudypix
+    if method == "williamson":
+        if "B11" not in timestack.band.values:
+            raise ValueError("Williamson cloud mask requires 'B11' (SWIR1) band.")
+        swir1 = timestack.sel(band="B11")
+        is_cloudy = (swir1 / 10000 > 0.140) | np.isnan(swir1)
+        mask_out = is_cloudy.astype("uint8")
+
+    elif method == "scl":
+        if "SCL" not in timestack.band.values:
+            raise ValueError("SCL cloud mask requires 'SCL' band.")
+        scl = timestack.sel(band="SCL")
+        # 3=cloud shadow, 8=cloud medium, 9=cloud high, 10=thin cirrus
+        is_cloudy = (scl == 3) | (scl == 8) | (scl == 9) | (scl == 10)
+        mask_out = is_cloudy.astype("uint8")
+
     else:
         raise ValueError(
-            f"Invalid mask_method '{mask_method}'. "
-            f"Supported methods: ['Williamson2018b']"
+            f"Invalid cloud mask method '{method}'. "
+            f"Supported: {CLOUD_METHODS}"
         )
+
+    mask_out.name = "cloudmask"
+    return mask_out
 
 
 def combo_scaler(x, p2=75, p1=25, range_max=1):
