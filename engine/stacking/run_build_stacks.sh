@@ -52,9 +52,46 @@ echo ""
 
 START_TIME=$(date +%s)
 
+# --- Build first stack solo and inspect it ---
+echo "Building first stack (single worker) for inspection..."
 python3 -u "$REPO_DIR/engine/stacking/build_stacks.py" \
     --csv "$REPO_DIR/labeling/labels/labels_2018_volumes_CW.csv" \
-    --output_dir "$REPO_DIR/labeling/CW_2018/stacks" \
+    --output_dir "$SHERLOCK_DIR/stacks/CW_2018" \
+    --id_col "new_id" \
+    --time_range "2018-05-01/2018-09-30" \
+    --bands B04 B03 B02 B08 B11 SCL \
+    --pix_res 10 \
+    --tile_size 512 \
+    --cloudmask scl \
+    --workers 1 \
+    --count 1
+
+# Inspect the first file
+FIRST_NC=$(ls "$SHERLOCK_DIR/stacks/CW_2018/"*.nc 2>/dev/null | head -1)
+if [ -n "$FIRST_NC" ]; then
+    echo ""
+    echo "=============================================="
+    echo "INSPECTING FIRST STACK: $FIRST_NC"
+    echo "=============================================="
+    ls -lh "$FIRST_NC"
+    python3 -c "
+import xarray as xr
+ds = xr.open_dataset('$FIRST_NC')
+print(ds)
+print()
+print('File size:', round(ds.nbytes / 1024 / 1024, 1), 'MB (in memory)')
+"
+    echo "=============================================="
+    echo ""
+else
+    echo "WARNING: No .nc file produced. Check errors above."
+fi
+
+# --- Build remaining stacks in parallel ---
+echo "Building remaining stacks (32 workers)..."
+python3 -u "$REPO_DIR/engine/stacking/build_stacks.py" \
+    --csv "$REPO_DIR/labeling/labels/labels_2018_volumes_CW.csv" \
+    --output_dir "$SHERLOCK_DIR/stacks/CW_2018" \
     --id_col "new_id" \
     --time_range "2018-05-01/2018-09-30" \
     --bands B04 B03 B02 B08 B11 SCL \
@@ -77,7 +114,7 @@ echo "End time: $(date)"
 echo "Duration: ${DURATION_HR}h ${DURATION_MIN_REM}m"
 echo "Exit code: $EXIT_CODE"
 
-NC_COUNT=$(ls "$REPO_DIR/labeling/CW_2018/stacks/"*.nc 2>/dev/null | wc -l)
+NC_COUNT=$(ls "$SHERLOCK_DIR/stacks/CW_2018/"*.nc 2>/dev/null | wc -l)
 echo "Stacks built: $NC_COUNT"
 echo "=============================================="
 
