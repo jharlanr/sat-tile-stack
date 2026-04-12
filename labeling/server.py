@@ -10,21 +10,25 @@ Usage:
 
 import sys
 import io
+import threading
 import argparse
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from collections import Counter
 
 import numpy as np
 import pandas as pd
+import xarray as xr
 import matplotlib
 matplotlib.use("Agg")
+matplotlib.rcParams['figure.max_open_warning'] = 0  # suppress warning
 import matplotlib.pyplot as plt
 from flask import Flask, jsonify, send_file, request, send_from_directory
 
 # Add repo root to path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from sat_tile_stack.visualize import _load_data, _render_frame
+from sat_tile_stack.visualize import _render_frame
 
 
 # ---------------------------------------------------------------------------
@@ -60,16 +64,88 @@ LABELS_CSV = Path(args.labels_csv)
 VAR = args.var
 CLASSES = args.classes
 
-# Cache loaded DataArrays
-_da_cache = {}
+# ---------------------------------------------------------------------------
+# Windowed prefetch cache
+#
+# Holds at most (PREFETCH_AHEAD + 1) fully-loaded DataArrays — the current
+# sample plus the next N unlabeled samples. A single background worker
+# pre-loads upcoming samples while the user labels the current one, so
+# /api/info for the next lake hits a warm cache instead of a 60s cold read.
+#
+# Memory is hard-capped: every time the user advances, _slide_window evicts
+# anything outside [current, current+PREFETCH_AHEAD]. Memory does NOT
+# compound over a labeling session.
+# ---------------------------------------------------------------------------
+
+PREFETCH_AHEAD = 2  # cache size = PREFETCH_AHEAD + 1; ~600MB peak at 200MB/file
+
+_cache = {}            # lake_id -> fully-loaded DataArray
+_in_flight = {}        # lake_id -> Future
+_cache_lock = threading.Lock()
+_prefetch_executor = ThreadPoolExecutor(max_workers=1)
+
+
+def _load_da_blocking(lake_id):
+    """Worker: open .nc and pull the variable fully into memory."""
+    nc_path = NC_DIR / f"{lake_id}.nc"
+    with xr.open_dataset(nc_path) as ds:
+        return ds[VAR].load()
 
 
 def get_da(lake_id):
-    if lake_id not in _da_cache:
-        nc_path = NC_DIR / f"{lake_id}.nc"
-        da, _ = _load_data(str(nc_path), var=VAR)
-        _da_cache[lake_id] = da.load()
-    return _da_cache[lake_id]
+    """Return DataArray for lake_id, blocking on prefetch if not yet loaded."""
+    with _cache_lock:
+        if lake_id in _cache:
+            return _cache[lake_id]
+        fut = _in_flight.get(lake_id)
+        if fut is None:
+            fut = _prefetch_executor.submit(_load_da_blocking, lake_id)
+            _in_flight[lake_id] = fut
+    da = fut.result()
+    with _cache_lock:
+        _cache[lake_id] = da
+        _in_flight.pop(lake_id, None)
+    return da
+
+
+def _unlabeled_ids():
+    all_ids = get_all_ids()
+    df = load_labels_df()
+    if "label" in df.columns:
+        labeled = set(df.dropna(subset=["label"])["lake_id"].astype(str))
+        labeled |= set(df[df["label"].astype(str) != ""]["lake_id"].astype(str))
+    else:
+        labeled = set()
+    return [fid for fid in all_ids if fid not in labeled]
+
+
+def slide_window(current_id):
+    """Evict everything outside [current, current+PREFETCH_AHEAD] in the
+    unlabeled-ID order, then schedule prefetches for any window slot not
+    already cached or in flight.
+    """
+    unlabeled = _unlabeled_ids()
+    try:
+        idx = unlabeled.index(current_id)
+        window = unlabeled[idx:idx + PREFETCH_AHEAD + 1]
+    except ValueError:
+        # current_id is already labeled (e.g. user revisiting); just pin it
+        window = [current_id]
+
+    keep = set(window)
+    with _cache_lock:
+        for lid in list(_cache.keys()):
+            if lid not in keep:
+                del _cache[lid]
+        for lid in list(_in_flight.keys()):
+            if lid not in keep:
+                fut = _in_flight.pop(lid)
+                fut.cancel()
+        for lid in keep:
+            if lid not in _cache and lid not in _in_flight:
+                _in_flight[lid] = _prefetch_executor.submit(
+                    _load_da_blocking, lid
+                )
 
 
 def get_all_ids():
@@ -96,6 +172,7 @@ def load_labels_df():
 
 
 def save_labels_df(df):
+    df = df.sort_values("lake_id", key=lambda s: s.str.extract(r"(\d+)$")[0].astype(int)).reset_index(drop=True)
     df.to_csv(LABELS_CSV, index=False)
 
 
@@ -135,6 +212,9 @@ def api_samples():
 def api_info(lake_id):
     """Get metadata for a sample."""
     da = get_da(lake_id)
+    # Slide the prefetch window so upcoming samples warm in the background
+    # while the user labels this one.
+    slide_window(lake_id)
     dates = [np.datetime_as_string(t, unit="D") for t in da.time.values]
     bands = [str(b) for b in da.band.values]
     return jsonify({
@@ -187,13 +267,13 @@ def api_frame(lake_id, frame_idx):
     tslice = da.isel(time=frame_idx)
     band_data = tslice.sel(band=rgb_bands)
 
+    plt.close('all')  # prevent memory leak from rapid requests
     fig, ax = plt.subplots(figsize=(5, 5))
     fig.patch.set_facecolor("black")
     ax.set_facecolor("black")
 
     if np.isnan(band_data.values).all():
-        ax.text(0.5, 0.5, "No data", ha="center", va="center",
-                fontsize=14, color="gray", transform=ax.transAxes)
+        pass  # just show black frame
     else:
         rgb = _render_frame(tslice, rgb_bands, "divide", {})
         ax.imshow(rgb)
@@ -203,7 +283,7 @@ def api_frame(lake_id, frame_idx):
                 ax.contour(mask, levels=[0.5], colors="red", linewidths=1)
 
     ax.axis("off")
-    plt.tight_layout(pad=0)
+    fig.subplots_adjust(left=0, right=1, top=1, bottom=0)
 
     buf = io.BytesIO()
     fig.savefig(buf, format="png", dpi=120, bbox_inches="tight",
@@ -211,6 +291,12 @@ def api_frame(lake_id, frame_idx):
     plt.close(fig)
     buf.seek(0)
     return send_file(buf, mimetype="image/png")
+
+
+@app.route("/api/ping")
+def api_ping():
+    """Lightweight heartbeat — no disk I/O."""
+    return jsonify({"status": "ok"})
 
 
 @app.route("/api/progress")
@@ -292,14 +378,34 @@ def api_flag():
 # ---------------------------------------------------------------------------
 
 if __name__ == "__main__":
-    import webbrowser, threading
+    import webbrowser
 
     url = f"http://localhost:{args.port}"
     print(f"\nLabeling server")
     print(f"  NC dir:     {NC_DIR}")
     print(f"  Labels CSV: {LABELS_CSV}")
     print(f"  Classes:    {CLASSES}")
-    print(f"  Samples:    {len(get_all_ids())}")
+
+    if not NC_DIR.exists():
+        print(f"\n  ERROR: NC directory does not exist: {NC_DIR}")
+        print(f"  Check that the volume is mounted.")
+        sys.exit(1)
+
+    n_samples = len(get_all_ids())
+    if n_samples == 0:
+        print(f"\n  ERROR: No .nc files found in {NC_DIR}")
+        print(f"  Directory exists but contains no NetCDF files. Check the mount.")
+        sys.exit(1)
+
+    print(f"  Samples:    {n_samples}")
+    print(f"  Prefetch:   {PREFETCH_AHEAD} ahead (cache size {PREFETCH_AHEAD + 1})")
+
+    # Pre-warm: start loading the first unlabeled sample now so the browser's
+    # initial /api/info request hits a (partially) warm cache.
+    _initial = _unlabeled_ids()
+    if _initial:
+        slide_window(_initial[0])
+
     print(f"\n  Opening {url} ...\n")
 
     # Silence Flask request logging
@@ -310,4 +416,17 @@ if __name__ == "__main__":
     # Open browser after a short delay (so Flask is ready)
     threading.Timer(1.0, lambda: webbrowser.open(url)).start()
 
+    import signal
+
+    def shutdown(sig, frame):
+        print("\n\n  Labeling server stopped.")
+        _prefetch_executor.shutdown(wait=False, cancel_futures=True)
+        print(f"  Labels saved to: {LABELS_CSV}")
+        df = load_labels_df()
+        n_labeled = len(df.dropna(subset=["label"])) if "label" in df.columns else 0
+        print(f"  Total labeled: {n_labeled}/{len(get_all_ids())}")
+        print("  Goodbye!\n")
+        sys.exit(0)
+
+    signal.signal(signal.SIGINT, shutdown)
     app.run(port=args.port, debug=False)

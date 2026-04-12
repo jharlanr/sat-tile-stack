@@ -21,15 +21,18 @@ Usage:
     >>> labeler.start()  # pops out a window
 """
 
+import threading
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from collections import Counter
 
 import numpy as np
 import pandas as pd
+import xarray as xr
 import matplotlib.pyplot as plt
 from matplotlib.widgets import Slider, Button, TextBox
 
-from sat_tile_stack.visualize import _load_data, _render_frame
+from sat_tile_stack.visualize import _render_frame
 
 
 # Default 5-class drainage scheme
@@ -71,6 +74,10 @@ class Labeler:
         Band name for mask contour overlay (default: None).
     prob_step : float
         Step size for probability sliders (default: 0.25).
+    prefetch_ahead : int
+        Number of upcoming samples to load in the background. Total cache
+        size is prefetch_ahead + 1 (current + lookahead). Default: 1, so
+        peak memory is roughly 2 * one stack.
     """
 
     def __init__(
@@ -86,6 +93,7 @@ class Labeler:
         var="reflectance",
         mask_band=None,
         prob_step=0.25,
+        prefetch_ahead=1,
     ):
         self.nc_dir = Path(nc_dir)
         self.labels_csv = Path(labels_csv)
@@ -98,6 +106,16 @@ class Labeler:
         self.var = var
         self.mask_band = mask_band
         self.prob_step = prob_step
+        self.prefetch_ahead = prefetch_ahead
+
+        # Background prefetcher: single worker so disk reads serialize and
+        # peak memory is bounded. _cache holds fully-loaded DataArrays for
+        # the window [current, current+prefetch_ahead]; everything outside
+        # that window is evicted on each sample change.
+        self._cache = {}
+        self._futures = {}
+        self._cache_lock = threading.Lock()
+        self._executor = ThreadPoolExecutor(max_workers=1)
 
         # Probability column names: p_ND, p_HF, etc.
         self.prob_cols = [f"p_{cn}" for cn in self.class_names]
@@ -141,19 +159,76 @@ class Labeler:
         valid = self.labels_df.dropna(subset=[self.label_col])
         return dict(Counter(valid[self.label_col].astype(str)))
 
+    def _load_da_blocking(self, lake_id):
+        """Worker: open .nc and pull the variable fully into memory."""
+        nc_path = self.nc_dir / f"{lake_id}.nc"
+        with xr.open_dataset(nc_path) as ds:
+            da = ds[self.var].load()
+        return da
+
+    def _get_or_load(self, lake_id):
+        """Return cached DataArray for lake_id, blocking on prefetch if needed."""
+        with self._cache_lock:
+            if lake_id in self._cache:
+                return self._cache[lake_id]
+            fut = self._futures.get(lake_id)
+            if fut is None:
+                fut = self._executor.submit(self._load_da_blocking, lake_id)
+                self._futures[lake_id] = fut
+        da = fut.result()
+        with self._cache_lock:
+            self._cache[lake_id] = da
+            self._futures.pop(lake_id, None)
+        return da
+
+    def _update_cache_window(self):
+        """Evict entries outside the prefetch window and schedule new prefetches.
+
+        Window = unlabeled_ids[sample_idx : sample_idx + prefetch_ahead + 1].
+        Anything cached or in-flight outside that window is dropped so memory
+        stays bounded as labeling progresses.
+        """
+        if not self.unlabeled_ids:
+            self._evict_all()
+            return
+        start = self._sample_idx
+        end = min(start + self.prefetch_ahead + 1, len(self.unlabeled_ids))
+        keep = set(self.unlabeled_ids[start:end])
+
+        with self._cache_lock:
+            for lid in list(self._cache.keys()):
+                if lid not in keep:
+                    del self._cache[lid]
+            for lid in list(self._futures.keys()):
+                if lid not in keep:
+                    fut = self._futures.pop(lid)
+                    fut.cancel()
+            for lid in keep:
+                if lid not in self._cache and lid not in self._futures:
+                    self._futures[lid] = self._executor.submit(
+                        self._load_da_blocking, lid
+                    )
+
+    def _evict_all(self):
+        with self._cache_lock:
+            self._cache.clear()
+            for fut in self._futures.values():
+                fut.cancel()
+            self._futures.clear()
+
     def _load_sample(self, sample_idx):
         if sample_idx >= len(self.unlabeled_ids):
             self._current_id = None
             self._current_da = None
+            self._update_cache_window()
             return
         self._sample_idx = sample_idx
         lake_id = self.unlabeled_ids[sample_idx]
         self._current_id = lake_id
-        nc_path = self.nc_dir / f"{lake_id}.nc"
-        da, _ = _load_data(nc_path, var=self.var)
-        self._current_da = da
-        self._frame_indices = list(range(len(da.time)))
+        self._current_da = self._get_or_load(lake_id)
+        self._frame_indices = list(range(len(self._current_da.time)))
         self._frame_idx = 0
+        self._update_cache_window()
 
     def _render_current_frame(self):
         if self._current_da is None:
@@ -502,6 +577,12 @@ class Labeler:
         btn_back.on_clicked(on_back)
         fig.canvas.mpl_connect("scroll_event", on_scroll)
         fig.canvas.mpl_connect("key_press_event", on_key)
+
+        def on_close(event):
+            self._evict_all()
+            self._executor.shutdown(wait=False, cancel_futures=True)
+
+        fig.canvas.mpl_connect("close_event", on_close)
 
         # Initial display
         update_all()

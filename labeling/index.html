@@ -34,10 +34,12 @@
     }
     #image-container {
         flex: 1; display: flex; align-items: center; justify-content: center;
-        cursor: grab; position: relative; min-height: 0;
+        cursor: grab; position: relative; min-height: 0; overflow: hidden;
+        width: 100%;
     }
     #main-image {
-        max-height: 100%; max-width: 100%; object-fit: contain;
+        height: 100%; aspect-ratio: 1 / 1;
+        object-fit: cover;
         user-select: none; -webkit-user-drag: none;
     }
     #date-label {
@@ -123,6 +125,7 @@
     .sample-item:hover { background: #333; }
     .sample-item.active { background: #2a4a6a; font-weight: bold; }
     .sample-item .flag-dot { color: #c84; margin-right: 4px; }
+    .sample-item .status-dot { margin-right: 4px; font-size: 9px; }
 </style>
 </head>
 <body>
@@ -132,6 +135,12 @@
     <div>
         <span class="id" id="lake-id">—</span>
         <span style="color:#666; margin-left:12px;" id="sample-counter">0/0</span>
+    </div>
+    <div id="status-indicator" style="
+        font-weight: bold; font-size: 13px; padding: 4px 14px; border-radius: 4px;
+        background: #1f4d2b; color: #6fdc8c; letter-spacing: 0.5px;
+        transition: background 0.15s, color 0.15s;">
+        LABEL NOW
     </div>
     <div class="progress">
         <span id="labeled-count">0</span>/<span id="total-count">0</span> labeled
@@ -150,9 +159,9 @@
                 position:absolute; top:0; left:0; right:0; bottom:0;
                 display:flex; align-items:center; justify-content:center;
                 flex-direction:column; gap:12px; text-align:center;">
-                <div style="font-size:36px;">✓</div>
-                <div style="color:#888; font-size:15px;">All samples labeled</div>
-                <div style="color:#555; font-size:12px;">Select a sample from the list to review or re-label</div>
+                <div id="placeholder-icon" style="font-size:36px;">⏳</div>
+                <div id="placeholder-title" style="color:#888; font-size:15px;">Loading...</div>
+                <div id="placeholder-subtitle" style="color:#555; font-size:12px;">Please wait</div>
             </div>
         </div>
         <div id="date-label" style="font-size:18px; color:#ddd; font-weight:bold; margin:6px 0;">—</div>
@@ -200,6 +209,7 @@
         <select id="list-filter" onchange="updateSampleList()" style="
             width:100%; background:#222; color:#eee; border:1px solid #444;
             border-radius:4px; padding:3px 6px; font-size:11px; margin-bottom:4px;">
+            <option value="all">All</option>
             <option value="unlabeled">To be labeled</option>
             <option value="labeled">Labeled</option>
             <option value="flagged">Flagged for revisit</option>
@@ -228,37 +238,52 @@
         </div>
 
         <p>Assign probability estimates for each drainage class. Probabilities must sum to 1.0.
-        The label is automatically set to the class with the highest probability (argmax).</p>
+        The label is automatically set to the class with the highest probability (argmax).
+        Use probability splits (e.g., 0.50/0.50) when uncertain. Flag ambiguous cases for revisit.</p>
 
-        <h3 style="color:#4488cc; margin:12px 0 6px;">Classes</h3>
+        <h3 style="color:#4488cc; margin:12px 0 6px;">ND — No Drainage</h3>
+        <ul style="padding-left:20px; margin:4px 0;">
+            <li>Lake does not drain its water in any way (laterally or englacially)</li>
+            <li>If there is <em>any</em> outlet stream, even a small one, it is <strong>not</strong> ND — that would be LD</li>
+            <li>A lake can still be ND even if streams are visible — if those streams flow <strong>into</strong> the lake (inlets), not out of it</li>
+            <li>To distinguish inlet vs outlet: streams generally taper from wide to narrow in the direction of flow, but this can be tricky — check whether the lake level drops over time (outlet/drainage) or stays stable/rises (inlet only, likely ND)</li>
+        </ul>
 
-        <p><strong>ND — No Drainage</strong><br>
-        <!-- TODO: Add description of what ND looks like in the imagery -->
-        Lake persists throughout the observation period with no significant drainage event.</p>
+        <h3 style="color:#4488cc; margin:12px 0 6px;">HF — Hydrofracture</h3>
+        <ul style="padding-left:20px; margin:4px 0;">
+            <li>Rapid drainage (often ~1 day) where water drains <strong>within the lake extent</strong></li>
+            <li>Look for: fracture scarps, ice chunks, sudden area decrease</li>
+            <li>If a lake drains into a moulin AND also hydrofractures → label as HF</li>
+            <li>New moulins that form from hydrofracture → still HF</li>
+            <li>If truly unclear moulin vs HF → label as HF and flag for revisit</li>
+        </ul>
 
-        <p><strong>HF — Hydrofracture</strong><br>
-        <!-- TODO: Add description and visual cues -->
-        Rapid drainage through fractures in the ice. Look for: sudden area decrease, crevasse patterns.</p>
+        <h3 style="color:#4488cc; margin:12px 0 6px;">MD — Moulin Drainage</h3>
+        <ul style="padding-left:20px; margin:4px 0;">
+            <li>Drainage into a moulin (vertical channel into the ice)</li>
+            <li>Tends to be <strong>slower</strong> than hydrofracture</li>
+            <li>Moulin is often <strong>outside</strong> the lake extent — don't confuse with lateral drainage</li>
+            <li>Moulin must be visible within the 512×512 frame (water disappears into ice in-frame)</li>
+            <li>Moulins sometimes become more obvious later in season after snow falls</li>
+            <li>If a lake drains via outlet stream that terminates in a moulin → label as MD</li>
+            <li>If a lake drains via stream AND separately into a moulin → label as MD</li>
+        </ul>
 
-        <p><strong>MD — Moulin Drainage</strong><br>
-        <!-- TODO: Add description and visual cues -->
-        Drainage through a moulin (vertical channel). Look for: gradual area decrease, possible channel visible.</p>
+        <h3 style="color:#4488cc; margin:12px 0 6px;">LD — Lateral Drainage</h3>
+        <ul style="padding-left:20px; margin:4px 0;">
+            <li>Lake drains via an outlet stream or slush field</li>
+            <li>If the outlet stream meanders out of frame (even if it might end in a moulin) → LD</li>
+            <li>Lake-to-lake drainage is always LD — if a lake drains into another lake's basin, even if that neighboring lake drains via HF or moulin, the source lake is LD</li>
+            <li>If a lake sits in a crevasse field but clearly drains via outlet stream → LD, not CD</li>
+        </ul>
 
-        <p><strong>LD — Lateral Drainage</strong><br>
-        <!-- TODO: Add description and visual cues -->
-        Water flows horizontally to adjacent area. Look for: directional water movement, channel formation.</p>
-
-        <p><strong>CD — Crevasse Drainage</strong><br>
-        <!-- TODO: Add description and visual cues -->
-        Water escapes through crevasse fields. Look for: crevasse patterns near lake, rapid drainage.</p>
-
-        <h3 style="color:#4488cc; margin:12px 0 6px;">Tips</h3>
-        <ul style="padding-left:20px;">
-            <li>Scrub through all frames to see the full temporal evolution</li>
-            <li>Pay attention to the rate of area change (sudden vs gradual)</li>
-            <li>Use probability splits (e.g., 0.50/0.50) when uncertain between two classes</li>
-            <li>Flag ambiguous cases for revisit</li>
-            <li>Use the notes field to record observations</li>
+        <h3 style="color:#4488cc; margin:12px 0 6px;">CD — Crevasse Drainage</h3>
+        <ul style="padding-left:20px; margin:4px 0;">
+            <li>Lake drains into a crevasse field</li>
+            <li>Catastrophic HF-like drainage in a crevasse field → still CD</li>
+            <li>Lake just outside/touching a crevasse field that drains → CD</li>
+            <li>Lake drains via stream <strong>into</strong> a crevasse field → CD</li>
+            <li>Lake in crevasse field but clearly drains via outlet stream out of frame → LD, not CD</li>
         </ul>
 
         <h3 style="color:#4488cc; margin:12px 0 6px;">Controls</h3>
@@ -282,6 +307,22 @@ let currentInfo = null;
 let frameIdx = 0;
 let classes = [];
 let probs = {};
+let isBusy = false;
+
+const STATUS_STYLES = {
+    ready:     { text: "LABEL NOW",        bg: "#1f4d2b", fg: "#6fdc8c" },
+    submitted: { text: "SUBMITTED",        bg: "#2a3f5f", fg: "#9ec5fe" },
+    loading:   { text: "LOADING NEXT...",  bg: "#5c4a1a", fg: "#ffd166" },
+};
+
+function setStatus(state) {
+    const el = document.getElementById("status-indicator");
+    if (!el) return;
+    const s = STATUS_STYLES[state] || STATUS_STYLES.ready;
+    el.textContent = s.text;
+    el.style.background = s.bg;
+    el.style.color = s.fg;
+}
 
 // ---------------------------------------------------------------------------
 // Init
@@ -390,7 +431,10 @@ function showAllDone() {
     document.getElementById("btn-back").disabled = true;
     document.getElementById("btn-submit").disabled = true;
     document.getElementById("main-image").src = "";
-    document.getElementById("image-placeholder").style.display = "block";
+    document.getElementById("image-placeholder").style.display = "flex";
+    document.getElementById("placeholder-icon").textContent = "✓";
+    document.getElementById("placeholder-title").textContent = "All samples labeled";
+    document.getElementById("placeholder-subtitle").textContent = "Select a sample from the list to review or re-label";
     document.getElementById("date-label").textContent = "";
     document.getElementById("sample-counter").textContent = "";
     document.getElementById("frame-slider").disabled = true;
@@ -409,7 +453,7 @@ async function loadSample(idx) {
 
     document.getElementById("lake-id").textContent = currentId;
     document.getElementById("sample-counter").textContent =
-        `${idx + 1}/${unlabeledIds.length} unlabeled`;
+        ``;
 
     await _loadAndDisplay(currentId);
 }
@@ -420,6 +464,13 @@ async function _loadAndDisplay(id) {
     // Re-enable controls (may have been disabled by showAllDone)
     document.getElementById("frame-slider").disabled = false;
     document.getElementById("image-placeholder").style.display = "none";
+
+    // Reset zoom
+    const img = document.getElementById("main-image");
+    img.style.transform = "scale(1)";
+    img.style.transformOrigin = "center center";
+    img.style.cursor = "grab";
+    isZoomed = false;
 
     // Reset frame slider
     const slider = document.getElementById("frame-slider");
@@ -481,6 +532,7 @@ document.getElementById("frame-slider").addEventListener("input", function () {
 let lastScrollTime = 0;
 document.getElementById("image-container").addEventListener("wheel", function (e) {
     e.preventDefault();
+    if (isBusy) return;
     const now = Date.now();
     if (now - lastScrollTime < 150) return;  // throttle
     lastScrollTime = now;
@@ -495,10 +547,33 @@ document.getElementById("image-container").addEventListener("wheel", function (e
     }
 }, { passive: false });
 
+// Double-click to zoom 2x / zoom out
+let isZoomed = false;
+document.getElementById("image-container").addEventListener("dblclick", function (e) {
+    const img = document.getElementById("main-image");
+    if (!isZoomed) {
+        // Zoom in 2x centered on click point
+        const rect = img.getBoundingClientRect();
+        const clickX = (e.clientX - rect.left) / rect.width * 100;
+        const clickY = (e.clientY - rect.top) / rect.height * 100;
+        img.style.transform = "scale(4)";
+        img.style.transformOrigin = `${clickX}% ${clickY}%`;
+        img.style.cursor = "zoom-out";
+        isZoomed = true;
+    } else {
+        // Zoom out
+        img.style.transform = "scale(1)";
+        img.style.transformOrigin = "center center";
+        img.style.cursor = "grab";
+        isZoomed = false;
+    }
+});
+
 // Arrow keys
 document.addEventListener("keydown", function (e) {
     // Don't capture if typing in notes
     if (document.activeElement === document.getElementById("notes-input")) return;
+    if (isBusy) { e.preventDefault(); return; }
 
     if (e.key === "ArrowRight") {
         e.preventDefault();
@@ -521,6 +596,7 @@ document.addEventListener("keydown", function (e) {
 // Actions
 // ---------------------------------------------------------------------------
 async function submitLabel() {
+    if (isBusy) return;
     if (!currentId) return;  // no sample loaded
     const total = Object.values(probs).reduce((a, b) => a + b, 0);
     if (Math.abs(total - 1.0) > 0.01) return;
@@ -528,44 +604,76 @@ async function submitLabel() {
     const notes = document.getElementById("notes-input").value;
     const flagged = document.getElementById("btn-flag").classList.contains("flagged");
 
-    await fetch("/api/label", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ lake_id: currentId, probs, notes, flagged }),
-    });
+    isBusy = true;
+    setStatus("submitted");
 
-    // Refresh
-    samples = await fetch("/api/samples").then(r => r.json());
-    unlabeledIds = samples.filter(s => !s.labeled).map(s => s.id);
+    try {
+        await fetch("/api/label", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ lake_id: currentId, probs, notes, flagged }),
+        });
 
-    const progressData = await fetch("/api/progress").then(r => r.json());
-    updateProgress(progressData);
+        // Refresh
+        samples = await fetch("/api/samples").then(r => r.json());
+        unlabeledIds = samples.filter(s => !s.labeled).map(s => s.id);
 
-    if (unlabeledIds.length === 0) {
-        document.getElementById("lake-id").textContent = "All labeled!";
-        showAllDone();
-        return;
+        const progressData = await fetch("/api/progress").then(r => r.json());
+        updateProgress(progressData);
+
+        if (unlabeledIds.length === 0) {
+            document.getElementById("lake-id").textContent = "All labeled!";
+            showAllDone();
+            return;
+        }
+
+        setStatus("loading");
+
+        // Stay at same index (next unlabeled slides in)
+        if (currentIdx >= unlabeledIds.length) {
+            currentIdx = unlabeledIds.length - 1;
+        }
+        await loadSample(currentIdx);
+        updateSampleList();
+        setStatus("ready");
+    } finally {
+        isBusy = false;
     }
+}
 
-    // Stay at same index (next unlabeled slides in)
-    if (currentIdx >= unlabeledIds.length) {
-        currentIdx = unlabeledIds.length - 1;
+// Build the list the user is currently navigating (matches the list-filter dropdown).
+function getFilteredSamples() {
+    const filter = document.getElementById("list-filter").value;
+    if (filter === "unlabeled") return samples.filter(s => !s.labeled);
+    if (filter === "labeled")   return samples.filter(s => s.labeled);
+    if (filter === "flagged")   return samples.filter(s => s.flagged);
+    return samples;  // "all"
+}
+
+async function goNeighbor(step) {
+    if (isBusy) return;
+    const list = getFilteredSamples();
+    if (list.length === 0) return;
+
+    let pos = list.findIndex(s => s.id === currentId);
+    // If current sample isn't in the filtered list, anchor to an edge so the
+    // first press moves into the list rather than staying put.
+    if (pos < 0) pos = step > 0 ? -1 : list.length;
+    const nextPos = Math.max(0, Math.min(list.length - 1, pos + step));
+    if (nextPos === pos) return;
+
+    isBusy = true;
+    setStatus("loading");
+    try {
+        await jumpToSampleInternal(list[nextPos].id);
+        setStatus("ready");
+    } finally {
+        isBusy = false;
     }
-    loadSample(currentIdx);
-    updateSampleList();
 }
 
-function goSkip() {
-    const next = Math.min(currentIdx + 1, unlabeledIds.length - 1);
-    loadSample(next);
-    updateSampleList();
-}
-
-function goBack() {
-    const prev = Math.max(0, currentIdx - 1);
-    loadSample(prev);
-    updateSampleList();
-}
+async function goSkip() { await goNeighbor(+1); }
+async function goBack() { await goNeighbor(-1); }
 
 async function toggleFlag() {
     await fetch("/api/flag", {
@@ -652,7 +760,9 @@ function updateSampleList() {
     container.innerHTML = "";
 
     let filtered = [];
-    if (filter === "unlabeled") {
+    if (filter === "all") {
+        filtered = samples;
+    } else if (filter === "unlabeled") {
         filtered = samples.filter(s => !s.labeled);
     } else if (filter === "labeled") {
         filtered = samples.filter(s => s.labeled);
@@ -668,28 +778,62 @@ function updateSampleList() {
     filtered.forEach(s => {
         const div = document.createElement("div");
         div.className = "sample-item" + (s.id === currentId ? " active" : "");
+        const statusDot = s.labeled ? "🟢" : "🟡";
         const flag = s.flagged ? '<span class="flag-dot">🚩</span>' : "";
-        div.innerHTML = flag + s.id;
+        div.innerHTML = `<span class="status-dot">${statusDot}</span>${flag}${s.id}`;
         div.onclick = () => jumpToSample(s.id);
         container.appendChild(div);
     });
 }
 
-async function jumpToSample(id) {
-    // Find in unlabeled list first
-    let idx = unlabeledIds.indexOf(id);
+async function jumpToSampleInternal(id) {
+    // Find in unlabeled list first — keeps currentIdx in sync for submit flow
+    const idx = unlabeledIds.indexOf(id);
     if (idx >= 0) {
-        loadSample(idx);
+        await loadSample(idx);
         updateSampleList();
         return;
     }
-    // If it's a labeled sample, load it directly for review
+    // Labeled sample: load directly for review
     currentId = id;
     document.getElementById("lake-id").textContent = id;
     document.getElementById("sample-counter").textContent = "(reviewing)";
     await _loadAndDisplay(id);
     updateSampleList();
 }
+
+async function jumpToSample(id) {
+    if (isBusy) return;
+    isBusy = true;
+    setStatus("loading");
+    try {
+        await jumpToSampleInternal(id);
+        setStatus("ready");
+    } finally {
+        isBusy = false;
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Server heartbeat — detect disconnection
+// ---------------------------------------------------------------------------
+setInterval(async () => {
+    try {
+        const resp = await fetch("/api/ping", {signal: AbortSignal.timeout(10000)});
+        if (!resp.ok) throw new Error();
+    } catch {
+        document.getElementById("lake-id").textContent = "Server disconnected";
+        document.getElementById("main-image").src = "";
+        document.getElementById("image-placeholder").style.display = "flex";
+        document.getElementById("placeholder-icon").textContent = "⚠";
+        document.getElementById("placeholder-title").textContent = "Server stopped";
+        document.getElementById("placeholder-subtitle").textContent = "Restart the server to continue labeling";
+        document.getElementById("btn-submit").disabled = true;
+        document.getElementById("btn-skip").disabled = true;
+        document.getElementById("btn-back").disabled = true;
+        document.getElementById("frame-slider").disabled = true;
+    }
+}, 5000);
 
 // Go
 // ---------------------------------------------------------------------------
