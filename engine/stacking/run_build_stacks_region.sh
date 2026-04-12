@@ -86,6 +86,7 @@ python3 -u -c "
 import json
 import csv
 import sys
+from shapely.geometry import shape
 
 region = '${REGION}'
 geojson_path = '${DUNMIRE_GEOJSON}'
@@ -100,18 +101,13 @@ for feat in data['features']:
     if props['region'] != region:
         continue
 
-    # Compute centroid from polygon coordinates
-    coords = feat['geometry']['coordinates']
-    # Handle Polygon (single ring) — use outer ring
-    ring = coords[0]
-    n = len(ring)
-    lon_c = sum(c[0] for c in ring) / n
-    lat_c = sum(c[1] for c in ring) / n
+    # Compute centroid via shapely (handles Polygon and MultiPolygon)
+    geom = shape(feat['geometry'])
+    c = geom.centroid
 
     row = dict(props)
-    row['lon'] = lon_c
-    row['lat'] = lat_c
-    # Store geometry as WKT-ish string for reference (not used by build_stacks)
+    row['lon'] = c.x
+    row['lat'] = c.y
     rows.append(row)
 
 if not rows:
@@ -125,7 +121,7 @@ with open(output_csv, 'w', newline='') as f:
     writer.writeheader()
     writer.writerows(rows)
 
-print(f'  Extracted {len(rows)} lakes for {region} {geojson_path.split(\"_\")[1][:4]}')
+print(f'  Extracted {len(rows)} lakes for {region}')
 print(f'  Saved to {output_csv}')
 "
 

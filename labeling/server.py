@@ -98,7 +98,7 @@ def get_da(lake_id):
         if lake_id in _cache:
             return _cache[lake_id]
         fut = _in_flight.get(lake_id)
-        if fut is None:
+        if fut is None or fut.cancelled():
             fut = _prefetch_executor.submit(_load_da_blocking, lake_id)
             _in_flight[lake_id] = fut
     da = fut.result()
