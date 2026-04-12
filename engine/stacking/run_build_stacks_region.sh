@@ -2,12 +2,12 @@
 #SBATCH --job-name=sts_build
 #SBATCH --output=/oak/stanford/groups/cyaolai/JoshRines/sherlock/sherlock_sattilestack/logs/%x_%j.out
 #SBATCH --error=/oak/stanford/groups/cyaolai/JoshRines/sherlock/sherlock_sattilestack/logs/%x_%j.err
-#SBATCH --time=24:00:00
-#SBATCH -p serc
+#SBATCH --time=12:00:00
+#SBATCH -p serc,normal
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
-#SBATCH --cpus-per-task=32
-#SBATCH --mem=128GB
+#SBATCH --cpus-per-task=16
+#SBATCH --mem=64GB
 #SBATCH --mail-type=ALL
 #SBATCH --mail-user=jrines@stanford.edu
 
