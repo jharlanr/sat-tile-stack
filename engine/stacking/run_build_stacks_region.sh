@@ -2,7 +2,7 @@
 #SBATCH --job-name=sts_build
 #SBATCH --output=/oak/stanford/groups/cyaolai/JoshRines/sherlock/sherlock_sattilestack/logs/%x_%j.out
 #SBATCH --error=/oak/stanford/groups/cyaolai/JoshRines/sherlock/sherlock_sattilestack/logs/%x_%j.err
-#SBATCH --time=12:00:00
+#SBATCH --time=18:00:00
 #SBATCH -p serc,normal
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
