@@ -31,7 +31,11 @@
 #
 # =============================================================================
 
-set -euo pipefail
+set -uo pipefail
+# Note: NOT using `set -e` because we explicitly tolerate some non-zero
+# exit codes downstream — e.g. the `ls ... | head -1` pattern used to
+# pick the first .nc file triggers SIGPIPE in `ls` under pipefail, which
+# would kill the script prematurely. We check $? manually where it matters.
 
 # --- Parse arguments ---
 REGION="${1:?Usage: sbatch run_build_stacks_region.sh <REGION> <YEAR>}"
