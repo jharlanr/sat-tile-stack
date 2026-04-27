@@ -2,32 +2,23 @@ name: sat-tile-stack
 channels:
   - conda-forge
   - defaults
+
+# Conda handles only:
+#   - the Python interpreter
+#   - non-Python tools (ffmpeg)
+#   - dev conveniences (jupyterlab, ipykernel)
+#
+# All Python package deps come from pyproject.toml via `pip install -e .[dev]`
+# at the bottom. That keeps a single source of truth — no duplicate dep lists.
+
 dependencies:
   - python>=3.9
-  # core scientific stack
-  - numpy
-  - pandas
-  - scipy
-  - xarray
-  - dask
-  - netcdf4
-  # geospatial
-  - geopandas
-  - rioxarray
-  - rasterio
-  - pyproj
-  - shapely
-  # plotting & movies
-  - matplotlib
+  - pip
+  # non-Python tools
   - ffmpeg
-  # notebooks
+  # dev conveniences
   - jupyterlab
   - ipykernel
   - tqdm
-  # pip-only packages
-  - pip
   - pip:
-    - pystac-client
-    - planetary-computer
-    - stackstac
-    - -e .
+    - -e .[dev]
