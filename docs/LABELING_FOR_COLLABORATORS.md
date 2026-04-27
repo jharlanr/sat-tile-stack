@@ -81,7 +81,8 @@ cd ~/irr_labeling
 ```
 
 Drop the `irr_lakes_<LABELER_ID>.csv` Josh sent you into this folder. Your
-output (`irr_labels_<LABELER_ID>.csv`) will land here too.
+two output files will land here too — one per year:
+`irr_labels_<LABELER_ID>_CW_2018.csv` and `irr_labels_<LABELER_ID>_CW_2019.csv`.
 
 ---
 
@@ -97,7 +98,7 @@ sessions.
 ```bash
 lakelabel \
     --nc_dir /Volumes/groups/cyaolai/JoshRines/sherlock/sherlock_sattilestack/stacks/CW_2019 \
-    --labels_csv irr_labels_<LABELER_ID>.csv \
+    --labels_csv irr_labels_<LABELER_ID>_CW_2019.csv \
     --lake_list irr_lakes_<LABELER_ID>.csv
 ```
 
@@ -115,30 +116,33 @@ You'll see:
 - A Flag button — mark lakes you want to revisit before finalizing.
 - A Submit button — saves and advances to the next unlabeled lake.
 
-**Save behavior:** every Submit immediately writes to `irr_labels_<LABELER_ID>.csv`
-in the directory where you launched the command. There is no "save all" step.
+**Save behavior:** every Submit immediately writes to the year-specific labels
+CSV (`irr_labels_<LABELER_ID>_CW_2019.csv` while you're on 2019 lakes) in the
+directory where you launched the command. There is no "save all" step.
 Closing the terminal or browser is safe.
 
 ### Switch to the 2018 lakes (later, same or different session)
 
 When you're done with 2019 (or want to mix it up), stop the server (`Ctrl-C`
-in the terminal) and relaunch with the 2018 stacks:
+in the terminal) and relaunch with the 2018 stacks and the 2018 output CSV:
 
 ```bash
 lakelabel \
     --nc_dir /Volumes/groups/cyaolai/JoshRines/sherlock/sherlock_sattilestack/stacks/CW_2018 \
-    --labels_csv irr_labels_<LABELER_ID>.csv \
+    --labels_csv irr_labels_<LABELER_ID>_CW_2018.csv \
     --lake_list irr_lakes_<LABELER_ID>.csv
 ```
 
-Same `--labels_csv` and `--lake_list` as before — the tool restricts to lakes
-in `irr_lakes_<LABELER_ID>.csv` that aren't already in `irr_labels_<LABELER_ID>.csv`.
+Same `--lake_list` as before, but the `--labels_csv` switches to the 2018
+file. The tool only shows lakes from `irr_lakes_<LABELER_ID>.csv` whose IDs
+match the `.nc` files in the directory you pointed at — so 2019 lakes won't
+appear when you're on 2018, and vice versa.
 
 ### Resuming after a break
 
-Just rerun the same `lakelabel ...` command. The tool reads
-`irr_labels_<LABELER_ID>.csv` on startup and starts you at the next unlabeled
-lake. No special "resume" step.
+Just rerun the same `lakelabel ...` command for whichever year you were on.
+The tool reads the year's labels CSV on startup and starts you at the next
+unlabeled lake. No special "resume" step.
 
 ---
 
@@ -156,13 +160,18 @@ lake. No special "resume" step.
 
 ## When you're done
 
-Send `irr_labels_<LABELER_ID>.csv` back to Josh. The file should have 200 rows.
+Send **both** `irr_labels_<LABELER_ID>_CW_2018.csv` and
+`irr_labels_<LABELER_ID>_CW_2019.csv` back to Josh. Each file should have
+100 rows.
 
 Sanity check before sending:
 
 ```bash
-wc -l irr_labels_<LABELER_ID>.csv     # should be 201 (200 rows + header)
-head -3 irr_labels_<LABELER_ID>.csv   # should show lake_id, label, p_ND, p_HF, p_MD, p_LD, p_CD, notes, flagged
+wc -l irr_labels_<LABELER_ID>_CW_2018.csv irr_labels_<LABELER_ID>_CW_2019.csv
+# each should be 101 (100 rows + header)
+
+head -3 irr_labels_<LABELER_ID>_CW_2019.csv
+# should show lake_id, label, p_ND, p_HF, p_MD, p_LD, p_CD, notes, flagged
 ```
 
 That's it.
