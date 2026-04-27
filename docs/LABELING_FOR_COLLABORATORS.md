@@ -13,16 +13,19 @@ sitting.
 
 ## What you need from Josh
 
-Before you start, Josh will send you (or point you at):
+Before you start, Josh will give you (or point you at):
 
-1. **`irr_lakes_<YOURNAME>.csv`** — your blind list of 200 lakes to label
+1. **A labeler ID** — your assigned identifier for this study (e.g. `labeler_2`
+   or `labeler_3`). Use it everywhere `<LABELER_ID>` appears below.
+2. **`irr_lakes_<LABELER_ID>.csv`** — your blind list of 200 lakes to label
    (just a `lake_id` column, randomized per labeler).
-2. **An OAK mount on your machine** — the `.nc` stack files live on Stanford's
+3. **An OAK mount on your machine** — the `.nc` stack files live on Stanford's
    OAK at:
    - `/Volumes/groups/cyaolai/JoshRines/sherlock/sherlock_sattilestack/stacks/CW_2018/`
    - `/Volumes/groups/cyaolai/JoshRines/sherlock/sherlock_sattilestack/stacks/CW_2019/`
-3. **A class-definitions reference** — short document with one canonical
-   example per class (ND/HF/MD/LD/CD) so we're calibrated.
+4. **A short calibration walkthrough** — Josh will go over one canonical
+   example per class (ND/HF/MD/LD/CD) before you start so we're aligned on
+   the taxonomy.
 
 ---
 
@@ -77,7 +80,8 @@ mkdir ~/irr_labeling
 cd ~/irr_labeling
 ```
 
-Drop the `irr_lakes_<YOURNAME>.csv` Josh sent you into this folder.
+Drop the `irr_lakes_<LABELER_ID>.csv` Josh sent you into this folder. Your
+output (`irr_labels_<LABELER_ID>.csv`) will land here too.
 
 ---
 
@@ -93,8 +97,8 @@ sessions.
 ```bash
 lakelabel \
     --nc_dir /Volumes/groups/cyaolai/JoshRines/sherlock/sherlock_sattilestack/stacks/CW_2019 \
-    --labels_csv irr_labels_<YOURNAME>.csv \
-    --lake_list irr_lakes_<YOURNAME>.csv
+    --labels_csv irr_labels_<LABELER_ID>.csv \
+    --lake_list irr_lakes_<LABELER_ID>.csv
 ```
 
 Your browser should open `http://localhost:5050` automatically. If it doesn't,
@@ -111,7 +115,7 @@ You'll see:
 - A Flag button — mark lakes you want to revisit before finalizing.
 - A Submit button — saves and advances to the next unlabeled lake.
 
-**Save behavior:** every Submit immediately writes to `irr_labels_<YOURNAME>.csv`
+**Save behavior:** every Submit immediately writes to `irr_labels_<LABELER_ID>.csv`
 in the directory where you launched the command. There is no "save all" step.
 Closing the terminal or browser is safe.
 
@@ -123,17 +127,17 @@ in the terminal) and relaunch with the 2018 stacks:
 ```bash
 lakelabel \
     --nc_dir /Volumes/groups/cyaolai/JoshRines/sherlock/sherlock_sattilestack/stacks/CW_2018 \
-    --labels_csv irr_labels_<YOURNAME>.csv \
-    --lake_list irr_lakes_<YOURNAME>.csv
+    --labels_csv irr_labels_<LABELER_ID>.csv \
+    --lake_list irr_lakes_<LABELER_ID>.csv
 ```
 
 Same `--labels_csv` and `--lake_list` as before — the tool restricts to lakes
-in `irr_lakes_<YOURNAME>.csv` that aren't already in `irr_labels_<YOURNAME>.csv`.
+in `irr_lakes_<LABELER_ID>.csv` that aren't already in `irr_labels_<LABELER_ID>.csv`.
 
 ### Resuming after a break
 
 Just rerun the same `lakelabel ...` command. The tool reads
-`irr_labels_<YOURNAME>.csv` on startup and starts you at the next unlabeled
+`irr_labels_<LABELER_ID>.csv` on startup and starts you at the next unlabeled
 lake. No special "resume" step.
 
 ---
@@ -152,13 +156,13 @@ lake. No special "resume" step.
 
 ## When you're done
 
-Send `irr_labels_<YOURNAME>.csv` back to Josh. The file should have 200 rows.
+Send `irr_labels_<LABELER_ID>.csv` back to Josh. The file should have 200 rows.
 
 Sanity check before sending:
 
 ```bash
-wc -l irr_labels_<YOURNAME>.csv     # should be 201 (200 rows + header)
-head -3 irr_labels_<YOURNAME>.csv   # should show lake_id, label, p_ND, p_HF, p_MD, p_LD, p_CD, notes, flagged
+wc -l irr_labels_<LABELER_ID>.csv     # should be 201 (200 rows + header)
+head -3 irr_labels_<LABELER_ID>.csv   # should show lake_id, label, p_ND, p_HF, p_MD, p_LD, p_CD, notes, flagged
 ```
 
 That's it.
@@ -170,7 +174,7 @@ That's it.
 **`lakelabel: command not found`**
 The pip install didn't put the script on your PATH. Activate the conda env
 where you installed it (`conda activate labeling`), or run
-`python -m sat_tile_stack.labeling.server --help` instead.
+`python -m sat_tile_stack.labeling --help` instead.
 
 **`ERROR: NC directory does not exist`**
 The OAK path is wrong, the mount isn't active, or you're off-VPN. Try

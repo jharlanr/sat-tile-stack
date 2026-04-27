@@ -24,6 +24,7 @@ dependencies = [
   "pyproj",
   "shapely",
   "netcdf4",
+  "scipy",
 ]
 
 [project.optional-dependencies]
@@ -38,10 +39,10 @@ labeling = [
 ]
 
 [project.scripts]
-lakelabel = "sat_tile_stack.labeling.server:main"
+lakelabel = "sat_tile_stack.labeling:main"
 
 [tool.setuptools]
-packages = ["sat_tile_stack", "sat_tile_stack.labeling"]
+packages = ["sat_tile_stack"]
 
 [tool.setuptools.package-data]
-"sat_tile_stack.labeling" = ["index.html"]
+"sat_tile_stack" = ["index.html"]
