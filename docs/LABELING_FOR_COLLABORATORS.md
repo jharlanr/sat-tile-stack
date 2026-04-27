@@ -17,8 +17,9 @@ Before you start, Josh will give you (or point you at):
 
 1. **A labeler ID** — your assigned identifier for this study (e.g. `labeler_2`
    or `labeler_3`). Use it everywhere `<LABELER_ID>` appears below.
-2. **`irr_lakes_<LABELER_ID>.csv`** — your blind list of 200 lakes to label
-   (just a `lake_id` column, randomized per labeler).
+2. **Two blind lake lists** — `irr_lakes_<LABELER_ID>_CW_2018.csv` and
+   `irr_lakes_<LABELER_ID>_CW_2019.csv`, 100 lakes each (just a `lake_id`
+   column, randomized per labeler).
 3. **An OAK mount on your machine** — the `.nc` stack files live on Stanford's
    OAK at:
    - `/Volumes/groups/cyaolai/JoshRines/sherlock/sherlock_sattilestack/stacks/CW_2018/`
@@ -80,18 +81,20 @@ mkdir ~/irr_labeling
 cd ~/irr_labeling
 ```
 
-Drop the `irr_lakes_<LABELER_ID>.csv` Josh sent you into this folder. Your
-two output files will land here too — one per year:
+Drop both `irr_lakes_<LABELER_ID>_CW_2018.csv` and
+`irr_lakes_<LABELER_ID>_CW_2019.csv` (the files Josh sent you) into this
+folder. Your two output files will land here too — one per year:
 `irr_labels_<LABELER_ID>_CW_2018.csv` and `irr_labels_<LABELER_ID>_CW_2019.csv`.
 
 ---
 
 ## Labeling
 
-The 200 lakes are split across two years (100 from 2018, 100 from 2019). The
-GUI runs one year at a time, but both runs share the same output CSV — the
-tool auto-skips lakes you've already labeled, so you can mix freely between
-sessions.
+The 200 lakes are split across two years (100 from 2018, 100 from 2019).
+You'll run the GUI **separately per year** — each year has its own input
+lake list and its own output labels CSV. The two years stay fully
+independent. Within a year, the tool auto-skips lakes you've already
+labeled, so you can quit and resume freely across sessions.
 
 ### Start the 2019 lakes
 
@@ -99,7 +102,7 @@ sessions.
 lakelabel \
     --nc_dir /Volumes/groups/cyaolai/JoshRines/sherlock/sherlock_sattilestack/stacks/CW_2019 \
     --labels_csv irr_labels_<LABELER_ID>_CW_2019.csv \
-    --lake_list irr_lakes_<LABELER_ID>.csv
+    --lake_list irr_lakes_<LABELER_ID>_CW_2019.csv
 ```
 
 Your browser should open `http://localhost:5050` automatically. If it doesn't,
@@ -130,13 +133,12 @@ in the terminal) and relaunch with the 2018 stacks and the 2018 output CSV:
 lakelabel \
     --nc_dir /Volumes/groups/cyaolai/JoshRines/sherlock/sherlock_sattilestack/stacks/CW_2018 \
     --labels_csv irr_labels_<LABELER_ID>_CW_2018.csv \
-    --lake_list irr_lakes_<LABELER_ID>.csv
+    --lake_list irr_lakes_<LABELER_ID>_CW_2018.csv
 ```
 
-Same `--lake_list` as before, but the `--labels_csv` switches to the 2018
-file. The tool only shows lakes from `irr_lakes_<LABELER_ID>.csv` whose IDs
-match the `.nc` files in the directory you pointed at — so 2019 lakes won't
-appear when you're on 2018, and vice versa.
+Both the input lake list and the output labels file switch to the 2018
+versions. The two years are fully independent — there's no shared CSV
+between them, so you can't accidentally cross years.
 
 ### Resuming after a break
 
