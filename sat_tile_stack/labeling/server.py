@@ -3,8 +3,9 @@ Lightweight Flask backend for the labeling GUI.
 
 Serves rendered frames from .nc timestacks and handles label storage.
 
-Usage:
-    python labeling/server.py --nc_dir path/to/stacks
+Usage (console script, after `pip install sat-tile-stack[labeling]`):
+    lakelabel --nc_dir path/to/stacks
+    lakelabel --nc_dir path/to/stacks --lake_list lakes.csv --labels_csv mine.csv
     Then open http://localhost:5050 in your browser.
 """
 
@@ -25,44 +26,20 @@ matplotlib.rcParams['figure.max_open_warning'] = 0  # suppress warning
 import matplotlib.pyplot as plt
 from flask import Flask, jsonify, send_file, request, send_from_directory
 
-# Add repo root to path
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-
 from sat_tile_stack.visualize import _render_frame
 
 
 # ---------------------------------------------------------------------------
-# CLI
+# Module-level config — populated by main()
 # ---------------------------------------------------------------------------
 
-def parse_args():
-    parser = argparse.ArgumentParser(description="Labeling server")
-    parser.add_argument("--nc_dir", type=str, required=True)
-    parser.add_argument("--labels_csv", type=str, default=None)
-    parser.add_argument("--var", type=str, default="reflectance")
-    parser.add_argument("--classes", nargs="+", default=["ND", "HF", "MD", "LD", "CD"])
-    parser.add_argument("--port", type=int, default=5050)
-    args = parser.parse_args()
-    if args.labels_csv is None:
-        # Auto-detect: if nc_dir is .../CW_2019/stacks, save labels to .../CW_2019/labels_CW_2019.csv
-        nc_path = Path(args.nc_dir).resolve()
-        parent = nc_path.parent  # e.g., .../CW_2019
-        parent_name = parent.name  # e.g., CW_2019
-        args.labels_csv = str(parent / f"labels_{parent_name}.csv")
-    return args
+NC_DIR = None
+LABELS_CSV = None
+VAR = "reflectance"
+CLASSES = ["ND", "HF", "MD", "LD", "CD"]
+LAKE_LIST_IDS = None  # set[str] | None — when set, get_all_ids() filters to this
 
-
-args = parse_args()
 app = Flask(__name__, static_folder=None)
-
-# ---------------------------------------------------------------------------
-# Data
-# ---------------------------------------------------------------------------
-
-NC_DIR = Path(args.nc_dir)
-LABELS_CSV = Path(args.labels_csv)
-VAR = args.var
-CLASSES = args.classes
 
 # ---------------------------------------------------------------------------
 # Windowed prefetch cache
@@ -149,7 +126,10 @@ def slide_window(current_id):
 
 
 def get_all_ids():
-    return sorted([f.stem for f in NC_DIR.glob("*.nc")])
+    ids = sorted([f.stem for f in NC_DIR.glob("*.nc")])
+    if LAKE_LIST_IDS is not None:
+        ids = [i for i in ids if i in LAKE_LIST_IDS]
+    return ids
 
 
 def load_labels_df():
@@ -374,17 +354,66 @@ def api_flag():
 
 
 # ---------------------------------------------------------------------------
-# Run
+# CLI
 # ---------------------------------------------------------------------------
 
-if __name__ == "__main__":
-    import webbrowser
+def parse_args(argv=None):
+    parser = argparse.ArgumentParser(
+        prog="lakelabel",
+        description="Browser-based labeling GUI for satellite timestacks.",
+    )
+    parser.add_argument("--nc_dir", type=str, required=True,
+                        help="Directory containing .nc timestack files.")
+    parser.add_argument("--labels_csv", type=str, default=None,
+                        help="Where to save labels (auto-detected from --nc_dir if omitted).")
+    parser.add_argument("--lake_list", type=str, default=None,
+                        help="CSV with a 'lake_id' column to filter --nc_dir to a specific subset.")
+    parser.add_argument("--var", type=str, default="reflectance",
+                        help="NetCDF variable name to render (default: reflectance).")
+    parser.add_argument("--classes", nargs="+", default=["ND", "HF", "MD", "LD", "CD"],
+                        help="Class names (default: ND HF MD LD CD).")
+    parser.add_argument("--port", type=int, default=5050)
+    parser.add_argument("--no-browser", action="store_true",
+                        help="Don't auto-open the browser.")
+    args = parser.parse_args(argv)
+    if args.labels_csv is None:
+        # Auto-detect: if nc_dir is .../CW_2019/stacks, save labels to .../CW_2019/labels_CW_2019.csv
+        nc_path = Path(args.nc_dir).resolve()
+        parent = nc_path.parent
+        parent_name = parent.name
+        args.labels_csv = str(parent / f"labels_{parent_name}.csv")
+    return args
+
+
+def _load_lake_list(path):
+    """Read a CSV with a 'lake_id' column and return a set of strings."""
+    df = pd.read_csv(path)
+    if "lake_id" not in df.columns:
+        raise ValueError(
+            f"--lake_list file {path} must have a 'lake_id' column "
+            f"(found columns: {list(df.columns)})"
+        )
+    return set(df["lake_id"].astype(str).tolist())
+
+
+def main(argv=None):
+    global NC_DIR, LABELS_CSV, VAR, CLASSES, LAKE_LIST_IDS
+
+    args = parse_args(argv)
+
+    NC_DIR = Path(args.nc_dir)
+    LABELS_CSV = Path(args.labels_csv)
+    VAR = args.var
+    CLASSES = list(args.classes)
+    LAKE_LIST_IDS = _load_lake_list(args.lake_list) if args.lake_list else None
 
     url = f"http://localhost:{args.port}"
     print(f"\nLabeling server")
     print(f"  NC dir:     {NC_DIR}")
     print(f"  Labels CSV: {LABELS_CSV}")
     print(f"  Classes:    {CLASSES}")
+    if LAKE_LIST_IDS is not None:
+        print(f"  Lake list:  {args.lake_list} ({len(LAKE_LIST_IDS)} ids)")
 
     if not NC_DIR.exists():
         print(f"\n  ERROR: NC directory does not exist: {NC_DIR}")
@@ -393,8 +422,12 @@ if __name__ == "__main__":
 
     n_samples = len(get_all_ids())
     if n_samples == 0:
-        print(f"\n  ERROR: No .nc files found in {NC_DIR}")
-        print(f"  Directory exists but contains no NetCDF files. Check the mount.")
+        if LAKE_LIST_IDS is not None:
+            print(f"\n  ERROR: No .nc files in {NC_DIR} match the lake list.")
+            print(f"  Check that --nc_dir and --lake_list refer to the same lakes.")
+        else:
+            print(f"\n  ERROR: No .nc files found in {NC_DIR}")
+            print(f"  Directory exists but contains no NetCDF files. Check the mount.")
         sys.exit(1)
 
     print(f"  Samples:    {n_samples}")
@@ -413,8 +446,9 @@ if __name__ == "__main__":
     log = logging.getLogger("werkzeug")
     log.setLevel(logging.WARNING)
 
-    # Open browser after a short delay (so Flask is ready)
-    threading.Timer(1.0, lambda: webbrowser.open(url)).start()
+    if not args.no_browser:
+        import webbrowser
+        threading.Timer(1.0, lambda: webbrowser.open(url)).start()
 
     import signal
 
@@ -430,3 +464,7 @@ if __name__ == "__main__":
 
     signal.signal(signal.SIGINT, shutdown)
     app.run(port=args.port, debug=False)
+
+
+if __name__ == "__main__":
+    main()

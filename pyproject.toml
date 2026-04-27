@@ -33,6 +33,15 @@ dev = [
   "black",
   "mypy",
 ]
+labeling = [
+  "flask",
+]
+
+[project.scripts]
+lakelabel = "sat_tile_stack.labeling.server:main"
 
 [tool.setuptools]
-packages = ["sat_tile_stack"]
+packages = ["sat_tile_stack", "sat_tile_stack.labeling"]
+
+[tool.setuptools.package-data]
+"sat_tile_stack.labeling" = ["index.html"]
