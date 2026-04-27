@@ -16,9 +16,21 @@ ENV/
 *.tif
 *.csv
 *.geojson
+!data/*.geojson
 
 .DS_Store
 
 *.log
 
 *.egg-info
+
+output/
+
+claudiary/
+
+labeling/test_stacks/
+labeling/labels/
+labeling/stacks/
+labeling/lookups/
+labeling/*/stacks/
+labeling/*/labels_*.csv
