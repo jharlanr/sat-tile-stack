@@ -56,7 +56,7 @@ conda activate labeling
 ### 3. Install the labeling tool
 
 ```bash
-pip install "sat-tile-stack[labeling] @ git+<URL Josh sends you>"
+pip install "sat-tile-stack[labeling] @ git+https://github.com/jharlanr/sat-tile-stack"
 ```
 
 This installs the package and a `lakelabel` command. Verify it worked:
