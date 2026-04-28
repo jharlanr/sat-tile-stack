@@ -126,10 +126,13 @@ def slide_window(current_id):
 
 
 def get_all_ids():
-    ids = sorted([f.stem for f in NC_DIR.glob("*.nc")])
     if LAKE_LIST_IDS is not None:
-        ids = [i for i in ids if i in LAKE_LIST_IDS]
-    return ids
+        # Preserve the order from --lake_list (the labeler's randomized
+        # presentation order). Filter to IDs whose .nc files actually
+        # exist in --nc_dir.
+        available = {f.stem for f in NC_DIR.glob("*.nc")}
+        return [lid for lid in LAKE_LIST_IDS if lid in available]
+    return sorted([f.stem for f in NC_DIR.glob("*.nc")])
 
 
 def load_labels_df():
@@ -386,14 +389,18 @@ def parse_args(argv=None):
 
 
 def _load_lake_list(path):
-    """Read a CSV with a 'lake_id' column and return a set of strings."""
+    """Read a CSV with a 'lake_id' column and return an ordered list of strings.
+
+    The list ordering is preserved so the GUI presents lakes in whatever
+    order the CSV specifies (e.g. a per-labeler randomized order for IRR).
+    """
     df = pd.read_csv(path)
     if "lake_id" not in df.columns:
         raise ValueError(
             f"--lake_list file {path} must have a 'lake_id' column "
             f"(found columns: {list(df.columns)})"
         )
-    return set(df["lake_id"].astype(str).tolist())
+    return df["lake_id"].astype(str).tolist()
 
 
 def main(argv=None):
