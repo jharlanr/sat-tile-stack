@@ -9,6 +9,21 @@ import numpy as np
 
 CLOUD_METHODS = ["williamson", "scl"]
 
+# Sentinel-2 Scene Classification Layer (SCL) class codes treated as "cloudy"
+# for the ESSD `cloud_mask` data variable. This is the single source of truth
+# for the SCL cloud definition; `stack.py` and the `cloud_mask` variable's
+# `source` attribute both reference it so the dataset's documented semantics
+# can never drift from the code.
+#
+#   3  = cloud shadow
+#   8  = cloud, medium probability
+#   9  = cloud, high probability
+#   10 = thin cirrus
+#
+# (SCL also defines 0=no_data, 1=saturated/defective, 2=dark area, 4=vegetation,
+#  5=bare soil, 6=water, 7=unclassified, 11=snow/ice — none flagged as cloud.)
+SCL_CLOUDY_CLASSES = (3, 8, 9, 10)
+
 
 def cloud_pix_mask(timestack, method="williamson"):
     """

@@ -59,7 +59,7 @@ python3 -u "$REPO_DIR/engine/stacking/build_stacks.py" \
     --output_dir "$SHERLOCK_DIR/stacks/CW_2018" \
     --id_col "new_id" \
     --time_range "2018-05-01/2018-09-30" \
-    --bands B04 B03 B02 B08 B11 SCL \
+    --bands B04 B03 B02 B08 B11 B12 SCL \
     --pix_res 10 \
     --tile_size 512 \
     --cloudmask scl \
@@ -94,7 +94,7 @@ python3 -u "$REPO_DIR/engine/stacking/build_stacks.py" \
     --output_dir "$SHERLOCK_DIR/stacks/CW_2018" \
     --id_col "new_id" \
     --time_range "2018-05-01/2018-09-30" \
-    --bands B04 B03 B02 B08 B11 SCL \
+    --bands B04 B03 B02 B08 B11 B12 SCL \
     --pix_res 10 \
     --tile_size 512 \
     --cloudmask scl \

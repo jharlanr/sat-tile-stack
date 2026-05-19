@@ -7,8 +7,43 @@ sanitization, and GeoTIFF export.
 
 import xarray as xr
 import numpy as np
-import json, re, warnings
+import json, re, warnings, numbers
 from datetime import datetime, timezone
+
+
+def _nc_safe_value(v):
+    """Coerce one attribute value to a netCDF-legal type.
+
+    netCDF attrs allow only str/bytes/number/array — NOT Python ``bool``
+    (``b1``). Order matters: ``bool`` is a subclass of ``int`` and
+    ``np.bool_`` is an ``np.generic``, so booleans must be caught before the
+    number/array check. Sets (e.g. stackstac's ``proj:bbox``) -> sorted list;
+    anything else non-serializable (RasterSpec, Affine) -> ``str``.
+    """
+    if isinstance(v, (bool, np.bool_)):
+        return np.int8(1 if v else 0)
+    if isinstance(v, set):
+        return sorted(v)
+    if isinstance(v, (str, bytes, list, tuple, np.ndarray, np.generic,
+                      numbers.Number)):
+        return v
+    return str(v)
+
+
+def _scrub_var_attrs(ds, drop):
+    """Drop `drop` keys and coerce values to netCDF-legal types on the global
+    attrs AND every variable's attrs (stackstac leaves a RasterSpec under
+    'spec' / an Affine under 'transform'; our checkpoint stores a bool).
+    Array/number attrs such as `flag_values` pass through untouched.
+    """
+    containers = [ds.attrs] + [ds[v].attrs for v in ds.variables]
+    for attrs in containers:
+        for k in list(attrs):
+            if k in drop:
+                attrs.pop(k)
+            else:
+                attrs[k] = _nc_safe_value(attrs[k])
+    return ds
 
 
 # ===========================================================================
@@ -35,10 +70,23 @@ def scrub_attrs(xr_obj, drop=()):
 
 _illegal_nc_name = re.compile(r"[^0-9A-Za-z_]")
 
+def _is_stringlike(arr):
+    """True if an object-dtype array actually holds strings/bytes (NetCDF can
+    write these fine as char/S1 — they must NOT be relocated to attrs)."""
+    flat = np.asarray(arr).ravel()
+    if flat.size == 0:
+        return False
+    return all(isinstance(e, (str, bytes)) for e in flat[:64] if e is not None)
+
+
 def sanitise_dataset(ds):
     """
-    Move variables with illegal NetCDF names or object dtype to global attributes.
-    Never touches dimension coordinates (band, time, x, y).
+    Move variables with illegal NetCDF names or non-serializable object dtype
+    to global attributes. Never touches dimension coordinates, and — crucially
+    — never relocates object arrays that are actually strings (e.g. band_name,
+    common_name, processing_baseline reopened as object dtype): NetCDF writes
+    those as char/S1 arrays, so dropping them silently destroys real
+    coordinates across the multi-write coregister flow.
     """
     ds = ds.copy()
     dim_coords = set(ds.dims)
@@ -46,7 +94,7 @@ def sanitise_dataset(ds):
         if v in dim_coords:
             continue
         bad_name = (":" in v) or _illegal_nc_name.search(v)
-        bad_type = ds[v].dtype == object
+        bad_type = (ds[v].dtype == object) and not _is_stringlike(ds[v].values)
         if not (bad_name or bad_type):
             continue
 
@@ -94,48 +142,50 @@ def _add_cf_metadata(ds, da):
     return finalize_cf(ds, spatial_vars=("reflectance",))
 
 
-# Known variables we annotate when present. Keys map var-name -> attrs dict.
+# Known variables/coords we annotate when present (CF safety net; values are
+# only set when missing — stack.py / coregister.py own the authoritative attrs).
+# ESSD v2 schema: reflectance + cloud_mask + water_mask_ndwi + lake_boundary
+# + p_water. No cloudy_seq_* (deferred to the JSTARS follow-up), no
+# pct*_inmask (derivable downstream).
 _KNOWN_VAR_ATTRS = {
     "reflectance": {
-        "long_name": "Sentinel-2 reflectance and derived per-pixel layers",
+        "long_name": "Sentinel-2 L2A raw surface-reflectance digital numbers",
         "units": "1",
     },
-    "water_area": {
-        "long_name": "lake water area",
-        "units": "m2",
+    "cloud_mask": {
+        "long_name": "Sentinel-2 SCL-derived cloud flag",
+        "flag_values": np.array([0, 1], dtype=np.uint8),
+        "flag_meanings": "clear cloudy",
     },
-    "cloudy_seq_rgb": {
-        "long_name": "tile usefulness prediction (RGB CNN)",
-        "units": "1",
-        "flag_values": np.array([0, 1], dtype=np.int8),
-        "flag_meanings": "cloudy useful",
+    "water_mask_ndwi": {
+        "long_name": "NDWI-derived supraglacial water mask (dynamic)",
+        "flag_values": np.array([0, 1], dtype=np.uint8),
+        "flag_meanings": "no_water water",
     },
-    "cloudy_seq_rgbn": {
-        "long_name": "tile usefulness prediction (RGB+NIR CNN)",
-        "units": "1",
-        "flag_values": np.array([0, 1], dtype=np.int8),
-        "flag_meanings": "cloudy useful",
+    "lake_boundary": {
+        "long_name": "static lake footprint (Dunmire 2021)",
+        "flag_values": np.array([0, 1], dtype=np.uint8),
+        "flag_meanings": "outside_lake inside_lake",
     },
-    "cloudy_seq_bns16": {
-        "long_name": "tile usefulness prediction (Blue+NIR+SWIR16 CNN)",
+    "p_water": {
+        "long_name": "fractional lake water extent (Dunmire 2025, S2_water)",
         "units": "1",
-        "flag_values": np.array([0, 1], dtype=np.int8),
-        "flag_meanings": "cloudy useful",
     },
     "eo_cloud_cover": {
         "long_name": "EO cloud-cover percentage from STAC item",
         "units": "percent",
     },
     "pct_nans": {
-        "long_name": "percentage of NaN pixels in the full tile",
+        "long_name": "percentage of NaN pixels in the spectral tile",
         "units": "percent",
     },
-    "pctnanpix_inmask": {
-        "long_name": "percentage of NaN pixels inside the lake mask",
-        "units": "1",
+    "processing_baseline": {
+        "long_name": "Sentinel-2 processing baseline (ESA software version)",
     },
-    "pctcloudypix_inmask": {
-        "long_name": "percentage of cloudy pixels inside the lake mask",
+    "boa_add_offset": {
+        "long_name": "BOA additive offset for raw->surface-reflectance "
+                     "conversion: surface_reflectance = (DN + boa_add_offset)/"
+                     "quantification_value",
         "units": "1",
     },
 }
@@ -248,6 +298,49 @@ def finalize_cf(
         except Exception:
             pass
 
+    # --- CF auxiliary coordinate variables for the labelled `band` axis ---
+    # `band` itself is the numeric dimension coordinate; the short names and
+    # per-band metadata are auxiliary coordinate variables (CF §5/§6 labels
+    # pattern). Promote them to coords and declare them via the explicit
+    # `coordinates` encoding on every band-spanning data var, so the file is
+    # self-describing for any CF tool and they round-trip as coordinates
+    # (not stray data variables) rather than relying on xarray implicit
+    # behaviour through the multi-write pipeline.
+    _BAND_AUX = ("band_name", "common_name", "title",
+                 "center_wavelength", "full_width_half_max", "gsd")
+    band_aux = [v for v in _BAND_AUX
+                if v in ds.variables and tuple(ds[v].dims) == ("band",)]
+    if band_aux:
+        to_set = [v for v in band_aux if v not in ds.coords]
+        if to_set:
+            ds = ds.set_coords(to_set)
+        if "center_wavelength" in band_aux:
+            ds["center_wavelength"].attrs.setdefault(
+                "standard_name", "sensor_band_central_radiation_wavelength")
+        coord_attr = " ".join(band_aux)
+        for vname, v in ds.data_vars.items():
+            if "band" in v.dims:
+                v.encoding["coordinates"] = coord_attr
+
+    return ds
+
+
+_CF_ATTR_BAD = re.compile(r"[^0-9A-Za-z_]")
+
+def _cf_sanitise_attr_names(ds):
+    """CF-1.8 §2.3: attribute names must start with a letter and contain only
+    letters/digits/underscores. Rewrites global attr names (``proj:bbox`` ->
+    ``proj_bbox``, ``s2:mgrs_tile`` -> ``s2_mgrs_tile``). Last-wins on the
+    rare collision; nothing here collides in practice.
+    """
+    fixed = {}
+    for k, v in list(ds.attrs.items()):
+        nk = _CF_ATTR_BAD.sub("_", k)
+        if not nk or not (nk[0].isalpha() or nk[0] == "_"):
+            nk = "x_" + nk
+        fixed[nk] = v
+    ds.attrs.clear()
+    ds.attrs.update(fixed)
     return ds
 
 
@@ -287,6 +380,12 @@ def write_netcdf(
         ds = finalize_cf(ds, spatial_vars=spatial_vars,
                          history_action=history_action)
 
+    # Variable-level attrs: scrub stackstac's non-serializable objects
+    # (RasterSpec under 'spec', Affine under 'transform') without touching
+    # valid array attrs like flag_values.
+    ds = _scrub_var_attrs(ds, drop=drop_attrs)
+    ds = _cf_sanitise_attr_names(ds)
+
     # Encoding: zlib for spatial vars, CF-standard for time.
     enc = {}
     for vname, v in ds.data_vars.items():
@@ -294,6 +393,18 @@ def write_netcdf(
             enc[vname] = dict(zlib=True, complevel=4)
             if np.issubdtype(v.dtype, np.floating):
                 enc[vname]["dtype"] = "float32"
+            # Preserve a declared integer no-data sentinel (e.g. the uint8
+            # water_mask_ndwi _FillValue=255) so CF missing-data decodes to
+            # NaN on read, exactly like the float reflectance/p_water NaNs.
+            fv = v.encoding.get("_FillValue", v.attrs.get("_FillValue"))
+            if fv is not None:
+                enc[vname]["_FillValue"] = fv
+    # CF-1.8 §2.2: the netCDF string (vlen) type is not allowed. Force every
+    # string variable/coord to a fixed-width CHARACTER array (adds a
+    # string-length dim) instead of NC_STRING.
+    for vname, v in ds.variables.items():
+        if v.dtype.kind in ("U", "S", "O"):
+            enc.setdefault(vname, {})["dtype"] = "S1"
     if "time" in ds.variables:
         enc["time"] = dict(units="days since 1970-01-01", calendar="standard")
     if encoding:

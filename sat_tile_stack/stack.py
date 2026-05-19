@@ -8,6 +8,8 @@ Element84 Earth Search).
 Supports any STAC collection: Sentinel-2, Sentinel-1, Landsat, etc.
 """
 
+import warnings
+
 import numpy as np
 import pandas as pd
 import xarray as xr
@@ -31,7 +33,113 @@ from .bounds import (
     pctnanpix_inmask,
     pctcloudypix_inmask,
 )
-from .utils import combo_scaler, cloud_pix_mask
+from .utils import combo_scaler, cloud_pix_mask, SCL_CLOUDY_CLASSES
+
+# The only non-spectral asset the ESSD build fetches. Pulled to derive
+# `cloud_mask`, then dropped from `reflectance` (it is a classification
+# layer, not surface reflectance).
+NONSPECTRAL_ASSETS = {"SCL"}
+
+# Sentinel-2 L2A quantification value: surface_reflectance = (DN + offset)/QV.
+# Stored in the dataset so the conversion is recoverable from the file alone.
+S2_QUANTIFICATION_VALUE = 10000
+
+
+def _boa_add_offset(item, band_names):
+    """BOA additive offset for a STAC item's reflectance assets.
+
+    Sentinel-2 L2A processing baseline >= 04.00 stores DN shifted by -1000;
+    surface_reflectance = (DN + boa_add_offset) / quantification_value. The
+    offset is product metadata (set by ESA's processing-software version),
+    so it is read from the item rather than assumed. Falls back to the
+    processing-baseline rule when explicit raster:bands metadata is absent.
+    """
+    for b in band_names:
+        if b in NONSPECTRAL_ASSETS:
+            continue
+        asset = item.assets.get(b)
+        if asset is None:
+            continue
+        rb = asset.extra_fields.get("raster:bands")
+        if rb and isinstance(rb, list) and rb and "offset" in rb[0]:
+            try:
+                return float(rb[0]["offset"])
+            except (TypeError, ValueError):
+                pass
+        break
+    bl = str(item.properties.get("s2:processing_baseline", "")).strip()
+    try:
+        return -1000.0 if float(bl) >= 4.0 else 0.0
+    except ValueError:
+        return 0.0
+
+
+# Per-band STAC metadata we keep as tidy band-indexed coords (units + dtype
+# normalized so they survive as coords rather than being flattened to attrs).
+_BAND_META_NUMERIC = {
+    "gsd": ("m", "nominal ground sample distance"),
+    "center_wavelength": ("um", "band center wavelength"),
+    "full_width_half_max": ("um", "band full width at half maximum"),
+}
+_BAND_META_STR = {
+    "common_name": "STAC common band name",
+    "title": "STAC band title",
+}
+
+
+def _tidy_coords(ds, epsg):
+    """Trim stackstac's coordinate clutter to a clean CF coordinate set.
+
+    stackstac attaches every STAC item property as a coordinate. Keep:
+    dimension coords (band/x/y/time), the per-band metadata, and the
+    time-indexed provenance/QA. Demote every *scalar* item-property coord
+    (s2:*, proj:*, epsg, instruments, ...) to a global attribute and drop it
+    as a coordinate — they describe the acquisition, not an axis, and CF does
+    not want them as coordinate variables. Per-band metadata dtypes/units are
+    normalized so they persist as coords (object dtype would otherwise be
+    yanked into attrs on write).
+
+    CF-1.8: a coordinate variable must be numeric & monotonic, so the
+    string-labelled ``band`` axis is converted to an integer index and the
+    short names ('B04'...) move to an auxiliary ``band_name`` coordinate.
+    """
+    if "band" in ds.coords and ds["band"].dtype.kind in ("U", "S", "O"):
+        names = np.array([str(b) for b in ds["band"].values])
+        ds = ds.assign_coords(band=np.arange(names.size, dtype="int32"))
+        ds = ds.assign_coords(band_name=("band", names))
+        ds["band"].attrs.update(long_name="spectral band index", units="1")
+        ds["band_name"].attrs.setdefault(
+            "long_name", "Sentinel-2 band short name")
+
+    for c in list(ds.coords):
+        if c in ("band", "x", "y", "time"):
+            continue
+        dims = ds[c].dims
+        if dims == ("band",):
+            if c in _BAND_META_NUMERIC:
+                units, ln = _BAND_META_NUMERIC[c]
+                ds[c] = ds[c].astype("float64")
+                ds[c].attrs.update(units=units, long_name=ln)
+            elif c in _BAND_META_STR:
+                ds[c] = ds[c].astype(str)
+                ds[c].attrs.setdefault("long_name", _BAND_META_STR[c])
+            continue
+        if dims == ("time",):
+            continue  # eo_cloud_cover / pct_nans / processing_baseline / boa_add_offset
+        if dims == ():
+            val = ds[c].values
+            try:
+                val = val.item()
+            except (ValueError, AttributeError):
+                pass
+            if isinstance(val, set):
+                val = sorted(val)
+            ds.attrs.setdefault(c, val)
+            ds = ds.reset_coords(c, drop=True)
+    # Authoritative CRS hint for finalize_cf's grid_mapping (set after the
+    # `epsg` scalar coord is demoted, so it can't be lost).
+    ds.attrs.setdefault("crs", f"EPSG:{epsg}")
+    return ds
 
 
 def sattile_stack(
@@ -119,14 +227,18 @@ def sattile_stack(
 
     Returns
     -------
-    xarray.DataArray
-        DataArray of shape (time, band, tile_size, tile_size). Coordinates
-        include:
-          - time: resampled steps over `time_range` at the given `cadence`
-          - band: the requested `band_names`
-          - y, x: projected coordinates of the tile
-          - eo_cloud_cover: cloud cover % (if available in collection metadata)
-          - pct_nans: percent of tile that is NaNs
+    xarray.Dataset
+        Dataset with data variables:
+          - reflectance (time, band, y, x): spectral bands only (SCL excluded),
+            raw L2A DN, float32. NOT normalized.
+          - cloud_mask (time, y, x): uint8 SCL-derived cloud flag
+            (0=clear, 1=cloudy), present when 'SCL' is in `band_names`.
+        Coordinates include time, band (spectral), y, x, eo_cloud_cover,
+        pct_nans, and the per-timestep processing provenance
+        `processing_baseline` and `boa_add_offset` (the raw->surface-
+        reflectance recipe; see `reflectance` attrs). The legacy `cloudmask`
+        method arg is retained for signature compatibility but the cloud
+        mask is always SCL-derived; `mask` is ignored (see warning).
 
     Notes
     -----
@@ -197,25 +309,44 @@ def sattile_stack(
     nodata_mask = (stack == 0).all(dim="band")
     stack = stack.where(~nodata_mask)
 
-    # Resample to requested cadence
+    # Split spectral reflectance from the SCL classification BEFORE resampling.
+    # Spectral bands are continuous and may be aggregated; SCL is categorical
+    # (class codes) so averaging it is meaningless — it is resampled with a
+    # categorical-safe 'first' regardless of `aggregation`. This is a
+    # deliberate correctness fix over the legacy single-array path, where a
+    # mean-resampled SCL could produce fractional codes that match no class.
+    spectral_names = [b for b in band_names if b not in NONSPECTRAL_ASSETS]
+    has_scl = "SCL" in band_names
+    spec = stack.sel(band=spectral_names)
+    scl = stack.sel(band="SCL") if has_scl else None
+
+    # Resample spectral reflectance to requested cadence
     start, end = time_range.split("/")
     full_steps = pd.date_range(start, end, freq=cadence)
 
     if aggregation == "mean":
-        stack_resampled = stack.resample(time=cadence).mean("time", keep_attrs=True)
+        spec_res = spec.resample(time=cadence).mean("time", keep_attrs=True)
     elif aggregation == "nearest":
-        stack_resampled = stack.reindex(time=full_steps, method="nearest", tolerance=cadence)
+        spec_res = spec.reindex(time=full_steps, method="nearest", tolerance=cadence)
     elif aggregation == "first":
-        stack_resampled = stack.resample(time=cadence).first(keep_attrs=True)
+        spec_res = spec.resample(time=cadence).first(keep_attrs=True)
     elif aggregation == "last":
-        stack_resampled = stack.resample(time=cadence).last(keep_attrs=True)
+        spec_res = spec.resample(time=cadence).last(keep_attrs=True)
     else:
         raise ValueError(
             f"Invalid aggregation '{aggregation}'. "
             f"Supported: 'mean', 'nearest', 'first', 'last'"
         )
 
-    stack_resampled = stack_resampled.reindex(time=full_steps, fill_value=np.nan)
+    spec_res = spec_res.reindex(time=full_steps, fill_value=np.nan)
+    stack_resampled = spec_res
+
+    # Resample SCL categorically (first observation in each cadence bin).
+    if scl is not None:
+        scl_res = scl.resample(time=cadence).first(keep_attrs=True)
+        scl_res = scl_res.reindex(time=full_steps, fill_value=np.nan)
+    else:
+        scl_res = None
 
     # Extract cloud cover metadata if available
     if items and "eo:cloud_cover" in items[0].properties:
@@ -227,6 +358,42 @@ def sattile_stack(
         daily_cc = cc_da.resample(time=cadence).max()
         daily_cc = daily_cc.reindex(time=full_steps, fill_value=np.nan)
         stack_resampled = stack_resampled.assign_coords(eo_cloud_cover=daily_cc)
+
+    # --- Per-timestep Sentinel-2 processing provenance ---
+    # `processing_baseline` (ESA software version) and `boa_add_offset` travel
+    # with the *product*, not the acquisition date. Recorded per original scene
+    # and aligned onto the resampled timeline so the raw->reflectance recipe
+    # (surface_reflectance = (DN + boa_add_offset) / quantification_value) is
+    # recoverable from the file alone. Categorical-safe 'first' per cadence bin.
+    baselines = np.array(
+        [str(it.properties.get("s2:processing_baseline", "")) for it in items],
+        dtype=object,
+    )
+    offsets = np.array(
+        [_boa_add_offset(it, band_names) for it in items], dtype="float64"
+    )
+    bl_da = xr.DataArray(baselines, coords={"time": stack.time}, dims=["time"])
+    off_da = xr.DataArray(offsets, coords={"time": stack.time}, dims=["time"])
+    bl_daily = bl_da.resample(time=cadence).first().reindex(
+        time=full_steps, fill_value=""
+    )
+    # Empty resample bins yield NaN (float) even for an object/string array;
+    # normalize the baseline coord to clean strings ("" == no observation) so
+    # it is both NetCDF-writable and safely sortable downstream.
+    # Fixed-width unicode (NOT object): an object-dtype coord is demoted to a
+    # global attr by io.sanitise_dataset, which would silently drop
+    # processing_baseline as a per-timestep coordinate.
+    bl_clean = np.array(
+        [b if isinstance(b, str) else "" for b in bl_daily.values],
+        dtype="<U16",
+    )
+    bl_daily = bl_daily.copy(data=bl_clean)
+    off_daily = off_da.resample(time=cadence).first().reindex(
+        time=full_steps, fill_value=np.nan
+    )
+    stack_resampled = stack_resampled.assign_coords(
+        processing_baseline=bl_daily, boa_add_offset=off_daily
+    )
 
     # Apply normalization if requested
     if normalize:
@@ -243,57 +410,119 @@ def sattile_stack(
             keep_attrs=True,
         )
 
-    # Crop tiles to desired size
+    if mask is not None:
+        warnings.warn(
+            "`mask` is ignored by sattile_stack in the v2 schema. The per-lake "
+            "footprint (`lake_boundary`) is co-registered separately via "
+            "coregister.add_static_polygon (Dunmire 2021).",
+            stacklevel=2,
+        )
+
+    # Crop tiles to desired size (reflectance + SCL share the same grid)
     buffer = tile_size * pix_res / 2  # [m]
     x_utm, y_utm = pyproj.Proj(stack.crs)(*centroid)
-    timestack = stack_resampled.loc[
+    reflectance_ts = stack_resampled.loc[
         ..., y_utm + buffer : y_utm - buffer, x_utm - buffer : x_utm + buffer
-    ]
+    ].astype("float32")
 
-    # Track percent of pixels that are NaN
-    nan_counts = timestack.isnull().sum(dim=("band", "y", "x"))
-    total = len(band_names) * tile_size * tile_size
+    scl_ts = None
+    if scl_res is not None:
+        scl_ts = scl_res.loc[
+            ..., y_utm + buffer : y_utm - buffer, x_utm - buffer : x_utm + buffer
+        ]
+
+    # Track percent of NaN pixels in the spectral tile
+    nan_counts = reflectance_ts.isnull().sum(dim=("band", "y", "x"))
+    total = len(spectral_names) * tile_size * tile_size
     pct_nans = (nan_counts / total) * 100
-    timestack = timestack.assign_coords(pct_nans=("time", pct_nans.values))
+    reflectance_ts = reflectance_ts.assign_coords(pct_nans=("time", pct_nans.values))
 
-    # Compute cloud mask if requested
-    if cloudmask is not False:
-        if callable(cloudmask):
-            cloud_mask_da = cloudmask(timestack)
-        elif isinstance(cloudmask, str):
-            cloud_mask_da = cloud_pix_mask(timestack, method=cloudmask)
-        else:
-            raise ValueError(
-                f"cloudmask must be False, a method name string, or a callable. "
-                f"Got: {type(cloudmask)}"
-            )
-        cloud_mask_da = cloud_mask_da.expand_dims(dim={"band": ["cloudmask"]})
-        timestack = xr.concat([timestack, cloud_mask_da], dim="band")
+    # Assemble the CF-style Dataset: reflectance (spectral) + cloud_mask (SCL).
+    ds = xr.Dataset(
+        data_vars={"reflectance": reflectance_ts},
+        attrs=dict(stack_resampled.attrs),
+    )
+    if scl_ts is not None:
+        cloud_mask = scl_ts.isin(SCL_CLOUDY_CLASSES).astype("uint8")
+        cloud_mask = cloud_mask.drop_vars("band", errors="ignore")
+        cloud_mask.attrs = {
+            "long_name": "Sentinel-2 SCL-derived cloud flag",
+            "flag_values": np.array([0, 1], dtype="uint8"),
+            "flag_meanings": "clear cloudy",
+            "source": (
+                "Sentinel-2 L2A Scene Classification Layer (SCL); cloudy = SCL "
+                f"classes {tuple(int(c) for c in SCL_CLOUDY_CLASSES)} "
+                "(3=cloud_shadow, 8=cloud_medium_prob, 9=cloud_high_prob, "
+                "10=thin_cirrus). Categorical 'first' resampling per cadence "
+                "bin. Days with no observation are 0 (clear); consult "
+                "`pct_nans` / reflectance NaNs to distinguish no-data."
+            ),
+        }
+        ds["cloud_mask"] = cloud_mask
 
-    # Generate spatial mask if provided
-    if mask is not None:
-        satmask = sat_mask_array(timestack, mask, feature_id=None)
-        timestack = xr.concat([timestack, satmask], dim="band")
+    # Demote stackstac's scalar item-property coords to global attrs; keep a
+    # clean CF coordinate set (band/x/y/time + band metadata + time provenance).
+    ds = _tidy_coords(ds, epsg)
 
-    # Track percent of pixels within mask that are NaNs and cloudy
-    if mask is not None:
-        pct_nan = pctnanpix_inmask(timestack)
-        timestack = timestack.assign_coords(pctnanpix_inmask=("time", pct_nan.data))
-        if cloudmask:
-            pct_cloudy = pctcloudypix_inmask(timestack)
-            timestack = timestack.assign_coords(
-                pctcloudypix_inmask=("time", pct_cloudy.data)
-            )
+    # Raw->surface-reflectance recipe, recoverable from the file alone.
+    ds["reflectance"].attrs.setdefault(
+        "long_name", "Sentinel-2 L2A raw surface-reflectance digital numbers"
+    )
+    ds["reflectance"].attrs.setdefault("units", "1")
+    ds["reflectance"].attrs.setdefault(
+        "comment",
+        "Raw Sentinel-2 L2A (BOA) digital numbers as delivered by Microsoft "
+        "Planetary Computer; NOT normalized. To convert to surface "
+        "reflectance: surface_reflectance = (DN + boa_add_offset) / "
+        f"quantification_value, with quantification_value = "
+        f"{S2_QUANTIFICATION_VALUE}. `boa_add_offset` and `processing_baseline` "
+        "are provided per timestep. Normalization is a downstream (ML) choice.",
+    )
+    ds.attrs["s2:quantification_value"] = S2_QUANTIFICATION_VALUE
 
-    # Convert to float32
-    timestack = timestack.astype("float32")
+    # Mixed-baseline checkpoint: surface it in attrs (stdout is suppressed in
+    # batch builds) and warn for interactive callers.
+    fin = off_daily.values[np.isfinite(off_daily.values.astype("float64"))] \
+        if off_daily.size else np.array([])
+    uniq_off = sorted({float(v) for v in fin})
+    uniq_bl = sorted({str(b) for b in bl_daily.values.tolist()
+                      if isinstance(b, str) and b})
+    ds.attrs["s2:processing_baseline_values"] = uniq_bl
+    ds.attrs["boa_add_offset_values"] = uniq_off
+    mixed = len(uniq_off) > 1
+    ds.attrs["mixed_processing_baseline"] = int(mixed)  # netCDF has no bool
+    if mixed:
+        warnings.warn(
+            f"Stack mixes Sentinel-2 processing baselines {uniq_bl} "
+            f"(boa_add_offset {uniq_off}). Raw DN are stored unaltered; "
+            "per-timestep `boa_add_offset` must be applied before comparing "
+            "values across the time series.",
+            stacklevel=2,
+        )
 
-    # Pull stack into memory if requested
     if pull_to_mem:
-        print(f"Pulling stack into memory, shape: {timestack.shape}")
+        print(
+            f"Pulling stack into memory: {len(items)} scenes -> "
+            f"vars {list(ds.data_vars)}, dims {dict(ds.sizes)} "
+            f"(this is network/IO-bound; minutes per full-season 512^2 lake)",
+            flush=True,
+        )
         with dask.diagnostics.ProgressBar():
-            timestack_mem = timestack.compute()
-        print(f"Stack loaded, shape: {timestack_mem.shape}")
-        return timestack_mem
-    else:
-        return timestack
+            ds = ds.compute()
+        # Distribution sanity gate (catches gross scale/offset corruption
+        # before a full Sherlock run). Raw S2 DN of glacial scenes sit well
+        # within (0, 20000); a wildly out-of-range median means something
+        # upstream is wrong.
+        rv = ds["reflectance"].values
+        finite = np.isfinite(rv)
+        if finite.any():
+            med = float(np.nanmedian(rv[finite]))
+            if not (0.0 < med < 20000.0):
+                raise ValueError(
+                    f"reflectance median DN {med:.1f} outside plausible "
+                    f"(0, 20000) — suspect scale/offset corruption "
+                    f"(baselines={uniq_bl}, offsets={uniq_off})."
+                )
+        print(f"Stack loaded, vars: {list(ds.data_vars)}", flush=True)
+
+    return ds

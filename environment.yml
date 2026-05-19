@@ -6,16 +6,23 @@ channels:
 # Conda handles only:
 #   - the Python interpreter
 #   - non-Python tools (ffmpeg)
+#   - the standard CF-1.8 validator (cfchecker) which needs the UDUNITS2
+#     system library — conda-forge bundles it so it works out of the box
+#     (pip users instead: `pip install .[validation]` + system UDUNITS2)
 #   - dev conveniences (jupyterlab, ipykernel)
 #
-# All Python package deps come from pyproject.toml via `pip install -e .[dev]`
-# at the bottom. That keeps a single source of truth — no duplicate dep lists.
+# All other Python package deps come from pyproject.toml via
+# `pip install -e .[dev]` at the bottom — single source of truth, no
+# duplicate dep lists.
 
 dependencies:
   - python>=3.9
   - pip
   # non-Python tools
   - ffmpeg
+  # standard CF-1.8 validator (brings UDUNITS2); powers sts-cf-check &
+  # the cfchecker path in cf_check.py / verify notebooks
+  - cfchecker
   # dev conveniences
   - jupyterlab
   - ipykernel

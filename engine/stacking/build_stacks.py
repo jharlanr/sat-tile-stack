@@ -36,7 +36,16 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 import pystac_client
 import planetary_computer
 
-from sat_tile_stack import sattile_stack, write_netcdf_from_da
+from sat_tile_stack import sattile_stack, write_netcdf
+from sat_tile_stack.coregister import (
+    add_scalar_series, add_static_polygon, add_ndwi_from_stack,
+)
+
+# Variables a fully-built v2 per-lake file must contain (used by _validate_nc
+# so a resubmitted job rebuilds partially-written / pre-coregister files).
+V2_REQUIRED_VARS = (
+    "reflectance", "cloud_mask", "p_water", "lake_boundary", "water_mask_ndwi",
+)
 
 
 def parse_args():
@@ -54,7 +63,7 @@ def parse_args():
     parser.add_argument("--time_range", type=str, required=True,
                         help="Time range YYYY-MM-DD/YYYY-MM-DD")
     parser.add_argument("--bands", nargs="+",
-                        default=["B04", "B03", "B02", "B08", "B11", "SCL"],
+                        default=["B04", "B03", "B02", "B08", "B11", "B12", "SCL"],
                         help="Band names to include")
     parser.add_argument("--collection", type=str, default="sentinel-2-l2a",
                         help="STAC collection ID")
@@ -70,6 +79,17 @@ def parse_args():
                         help="Starting row index")
     parser.add_argument("--count", type=int, default=None,
                         help="Number of rows to process (None = all)")
+    # --- Stage-2 coregister (single end-to-end per-lake, in place) ---
+    parser.add_argument("--coregister", action="store_true",
+                        help="After build, add p_water + lake_boundary + "
+                             "water_mask_ndwi in place (one .nc per lake)")
+    parser.add_argument("--dunmire_nc", type=str, default=None,
+                        help="Dunmire all_lakes_<YEAR>.nc (p_water source)")
+    parser.add_argument("--boundary_geojson", type=str, default=None,
+                        help="Dunmire labels_<YEAR>_volumes.geojson "
+                             "(lake_boundary polygons)")
+    parser.add_argument("--ndwi_min", type=float, default=0.3,
+                        help="NDWI water threshold (Dunmire 2021/2025: 0.3)")
     return parser.parse_args()
 
 
@@ -77,26 +97,32 @@ MAX_RETRIES = 3
 RETRY_DELAY = 10  # seconds
 
 
-def _validate_nc(filepath, expected_tile_size):
-    """Quick check if an existing .nc file is complete. Only reads metadata, not data."""
+def _validate_nc(filepath, expected_tile_size, require_coreg=False):
+    """Quick check if an existing .nc file is complete. Only reads metadata.
+
+    When ``require_coreg`` is set (end-to-end mode), a file missing any of the
+    coregistered v2 variables is treated as incomplete so a resubmitted job
+    rebuilds it rather than skipping a stage-1-only leftover.
+    """
     try:
         import xarray as xr
         ds = xr.open_dataset(str(filepath))
-        if "reflectance" not in ds:
+        try:
+            if "reflectance" not in ds:
+                return False
+            da = ds["reflectance"]
+            if da.sizes.get("time", 0) == 0:
+                return False
+            if (da.sizes.get("y", 0) < expected_tile_size
+                    or da.sizes.get("x", 0) < expected_tile_size):
+                return False
+            if "band" not in ds.coords:
+                return False
+            if require_coreg and any(v not in ds for v in V2_REQUIRED_VARS):
+                return False
+            return True
+        finally:
             ds.close()
-            return False
-        da = ds["reflectance"]
-        if da.sizes.get("time", 0) == 0:
-            ds.close()
-            return False
-        if da.sizes.get("y", 0) < expected_tile_size or da.sizes.get("x", 0) < expected_tile_size:
-            ds.close()
-            return False
-        if "band" not in ds.coords:
-            ds.close()
-            return False
-        ds.close()
-        return True
     except Exception:
         return False
 
@@ -110,9 +136,12 @@ def build_one_stack(task):
     lake_id, lon, lat, args_dict = task
     outfile = Path(args_dict["output_dir"]) / f"{lake_id}.nc"
 
-    # Check if file exists AND is valid
+    coregister = args_dict.get("coregister", False)
+
+    # Check if file exists AND is valid (full v2 set when coregistering)
     if outfile.exists():
-        if _validate_nc(outfile, args_dict["tile_size"]):
+        if _validate_nc(outfile, args_dict["tile_size"],
+                        require_coreg=coregister):
             return {"status": "skip", "id": lake_id}
         else:
             outfile.unlink()  # corrupted/incomplete — delete and rebuild
@@ -146,7 +175,35 @@ def build_one_stack(task):
                 _sys.stdout = _old_stdout
                 _sys.stderr = _old_stderr
 
-            write_netcdf_from_da(stack, str(outfile))
+            # stack is now an xarray.Dataset (reflectance + cloud_mask);
+            # write_netcdf finalizes CF-1.8 and auto-detects spatial vars.
+            write_netcdf(stack, str(outfile))
+
+            # Stage-2: coregister the ancillary layers IN PLACE (atomic
+            # temp+rename, output == input) — one .nc per lake, identical
+            # to the verification notebook. Deterministic, no network.
+            if coregister:
+                op = str(outfile)
+                _so, _se = _sys.stdout, _sys.stderr
+                _sys.stdout = _io.StringIO()
+                _sys.stderr = _io.StringIO()
+                try:
+                    add_scalar_series(
+                        op, op, source_nc=args_dict["dunmire_nc"],
+                        source_var="S2_water", lake_id=lake_id,
+                        target_var="p_water",
+                    )
+                    add_static_polygon(
+                        op, op, geojson=args_dict["boundary_geojson"],
+                        lake_id=lake_id, target_var="lake_boundary",
+                    )
+                    add_ndwi_from_stack(
+                        op, op, ndwi_min=args_dict["ndwi_min"],
+                        target_var="water_mask_ndwi",
+                    )
+                finally:
+                    _sys.stdout, _sys.stderr = _so, _se
+
             return {"status": "ok", "id": lake_id}
 
         except Exception as e:
@@ -185,6 +242,17 @@ def main():
     print(f"Workers:    {args.workers}")
     print(f"{'='*60}\n", flush=True)
 
+    if args.coregister:
+        missing = [n for n, v in (("--dunmire_nc", args.dunmire_nc),
+                                   ("--boundary_geojson", args.boundary_geojson))
+                   if not v]
+        if missing:
+            raise SystemExit(f"--coregister requires {', '.join(missing)}")
+        print(f"Coregister: ON  (one .nc/lake, in place)")
+        print(f"  p_water  <- {args.dunmire_nc}")
+        print(f"  boundary <- {args.boundary_geojson}")
+        print(f"  ndwi_min  = {args.ndwi_min}", flush=True)
+
     # Build task list
     args_dict = {
         "output_dir": str(output_dir),
@@ -194,6 +262,10 @@ def main():
         "pix_res": args.pix_res,
         "tile_size": args.tile_size,
         "cloudmask": args.cloudmask,
+        "coregister": args.coregister,
+        "dunmire_nc": args.dunmire_nc,
+        "boundary_geojson": args.boundary_geojson,
+        "ndwi_min": args.ndwi_min,
     }
 
     tasks = [
