@@ -17,6 +17,7 @@ dependencies = [
   "rioxarray",
   "matplotlib",
   "dask[complete]",
+  "pystac",
   "pystac-client",
   "planetary-computer",
   "rasterio",
@@ -25,6 +26,7 @@ dependencies = [
   "shapely",
   "netcdf4",
   "scipy",
+  "zarr>=3",
 ]
 
 [project.optional-dependencies]
@@ -37,9 +39,13 @@ dev = [
 labeling = [
   "flask",
 ]
+validation = [
+  "cfchecker",
+]
 
 [project.scripts]
 lakelabel = "sat_tile_stack.labeling:main"
+sts-cf-check = "sat_tile_stack.cf_check:main"
 
 [tool.setuptools]
 packages = ["sat_tile_stack"]

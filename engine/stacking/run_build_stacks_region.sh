@@ -55,7 +55,13 @@ fi
 REPO_DIR="/oak/stanford/groups/cyaolai/JoshRines/repos/sat-tile-stack"
 SHERLOCK_DIR="/oak/stanford/groups/cyaolai/JoshRines/sherlock/sherlock_sattilestack"
 DUNMIRE_GEOJSON="$REPO_DIR/labeling/dunmire/labels_${YEAR}_volumes.geojson"
-OUTPUT_DIR="$SHERLOCK_DIR/stacks/${REGION}_${YEAR}"
+# Dunmire 2025 per-lake daily series (p_water source). CONFIRM/EDIT this path
+# on Sherlock before submitting — must contain an `ids` coord with this
+# region's lake IDs and an `S2_water` variable.
+DUNMIRE_NC="$SHERLOCK_DIR/dunmire/all_lakes_${YEAR}.nc"
+# v2 CF-1.8 rebuild lands in a fresh tree; v1 stacks/ stays untouched as a
+# fallback until v2 passes validation (see sat-tile-stack/claudiary/20260508F).
+OUTPUT_DIR="$SHERLOCK_DIR/stacks_v2/${REGION}_${YEAR}"
 EXTRACT_CSV="$SHERLOCK_DIR/stacks/${REGION}_${YEAR}_centroids.csv"
 
 mkdir -p "$SHERLOCK_DIR/logs"
@@ -68,8 +74,20 @@ echo "Region:     $REGION"
 echo "Year:       $YEAR"
 echo "GeoJSON:    $DUNMIRE_GEOJSON"
 echo "Output:     $OUTPUT_DIR"
+echo "DunmireNC:  $DUNMIRE_NC"
 echo "CPUs:       ${SLURM_CPUS_PER_TASK:-1}"
 echo "=============================================="
+
+# --- Pre-flight: fail fast on missing coregister inputs (don't waste an
+#     overnight build only to have every lake's coregister step error). ---
+for f in "$DUNMIRE_GEOJSON" "$DUNMIRE_NC"; do
+    if [ ! -f "$f" ]; then
+        echo "ERROR: required coregister input not found: $f"
+        echo "Edit DUNMIRE_NC / DUNMIRE_GEOJSON in this script (or stage the"
+        echo "file) before submitting. Aborting."
+        exit 1
+    fi
+done
 
 # --- Load modules ---
 ml system
@@ -78,7 +96,12 @@ ml py-numpy/1.26.3_py312
 ml py-pandas/2.2.1_py312
 ml py-scipy/1.12.0_py312
 
-pip install --user xarray netcdf4 pystac-client planetary-computer stackstac geopandas rioxarray pyproj shapely matplotlib dask
+# numpy/pandas/scipy come from the Sherlock modules above (pip-installing
+# them would conflict). rasterio is explicit (add_static_polygon needs
+# rasterio.features/warp; don't rely on it being transitive); zarr is
+# harmless + future-proofs add_raster_zarr.
+pip install --user xarray netcdf4 pystac-client planetary-computer stackstac \
+    geopandas rioxarray pyproj shapely rasterio "zarr>=3" matplotlib dask
 
 export PYTHONPATH="$REPO_DIR:$PYTHONPATH"
 
@@ -142,12 +165,16 @@ python3 -u "$REPO_DIR/engine/stacking/build_stacks.py" \
     --output_dir "$OUTPUT_DIR" \
     --id_col "new_id" \
     --time_range "${YEAR}-05-01/${YEAR}-09-30" \
-    --bands B04 B03 B02 B08 B11 SCL \
+    --bands B04 B03 B02 B08 B11 B12 SCL \
     --pix_res 10 \
     --tile_size 512 \
     --cloudmask scl \
     --workers 1 \
-    --count 1
+    --count 1 \
+    --coregister \
+    --dunmire_nc "$DUNMIRE_NC" \
+    --boundary_geojson "$DUNMIRE_GEOJSON" \
+    --ndwi_min 0.3
 
 # Inspect the first file
 FIRST_NC=$(ls "$OUTPUT_DIR/"*.nc 2>/dev/null | head -1)
@@ -177,11 +204,15 @@ python3 -u "$REPO_DIR/engine/stacking/build_stacks.py" \
     --output_dir "$OUTPUT_DIR" \
     --id_col "new_id" \
     --time_range "${YEAR}-05-01/${YEAR}-09-30" \
-    --bands B04 B03 B02 B08 B11 SCL \
+    --bands B04 B03 B02 B08 B11 B12 SCL \
     --pix_res 10 \
     --tile_size 512 \
     --cloudmask scl \
-    --workers 8
+    --workers 8 \
+    --coregister \
+    --dunmire_nc "$DUNMIRE_NC" \
+    --boundary_geojson "$DUNMIRE_GEOJSON" \
+    --ndwi_min 0.3
 
 EXIT_CODE=$?
 
