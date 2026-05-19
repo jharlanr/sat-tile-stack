@@ -2,7 +2,7 @@
 #SBATCH --job-name=sts_build
 #SBATCH --output=/oak/stanford/groups/cyaolai/JoshRines/sherlock/sherlock_sattilestack/logs/%x_%j.out
 #SBATCH --error=/oak/stanford/groups/cyaolai/JoshRines/sherlock/sherlock_sattilestack/logs/%x_%j.err
-#SBATCH --time=18:00:00
+#SBATCH --time=47:30:00
 #SBATCH -p serc,normal
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
@@ -12,12 +12,24 @@
 #SBATCH --mail-user=jrines@stanford.edu
 
 # =============================================================================
-# BUILD TIMESTACKS FOR ANY REGION + YEAR
+# BUILD + LABEL + CF-CHECK TIMESTACKS FOR ANY REGION + YEAR  (one job)
 # =============================================================================
 #
-# Builds 512x512 @ 10m daily timestacks (May-Sep) from Dunmire GeoJSON.
-# Filters by IMBIE region, computes polygon centroids, then runs
-# build_stacks.py with consistent parameters.
+# Single self-contained job, scoped to one <REGION> <YEAR>, three stages:
+#   1. BUILD     512x512 @ 10m daily timestacks (May-Sep) from Dunmire
+#                GeoJSON + coregister chain (reflectance / cloud_mask /
+#                water_mask_ndwi / lake_boundary / p_water).  Resume-safe.
+#   2. LABELS    embed expert 5-class drainage labels in place
+#                (drainage_label + label_probability + class/class_name),
+#                CF-1.8 netCDF append. Idempotent (labeled files skipped).
+#   3. CF-CHECK  validate the now label-complete dir to CF-1.8. The job's
+#                exit code reflects this stage, so a green job = built +
+#                labeled + CF-signed-off.
+#
+# Every stage is resume-safe/idempotent, so re-submitting after a timeout
+# just continues. Labels CSV must be staged on OAK before submit (hard
+# pre-flight below) so an 18h+ build is never wasted on a stage-2 that
+# cannot run.
 #
 # USAGE:
 #   sbatch run_build_stacks_region.sh <REGION> <YEAR>
@@ -28,6 +40,7 @@
 # EXAMPLES:
 #   sbatch run_build_stacks_region.sh CW 2019
 #   sbatch run_build_stacks_region.sh NW 2018
+#   LABELS_DIR=/some/other/dir sbatch run_build_stacks_region.sh CW 2018
 #
 # =============================================================================
 
@@ -62,6 +75,10 @@ DUNMIRE_NC="/oak/stanford/groups/cyaolai/JoshRines/data/dunmire/all_lakes_${YEAR
 # fallback until v2 passes validation (see sat-tile-stack/claudiary/20260508F).
 OUTPUT_DIR="$SHERLOCK_DIR/stacks_v2/${REGION}_${YEAR}"
 EXTRACT_CSV="$SHERLOCK_DIR/stacks_v2/${REGION}_${YEAR}_centroids.csv"
+# Stage-2 input: canonical 5-class label CSV (lake_id,label,p_ND..p_CD,
+# notes,flagged). Override at submit: LABELS_DIR=/path sbatch ...
+LABELS_DIR="${LABELS_DIR:-/oak/stanford/groups/cyaolai/JoshRines/data/labels}"
+LABELS_CSV="$LABELS_DIR/labels_${REGION}_${YEAR}.csv"
 
 mkdir -p "$SHERLOCK_DIR/logs"
 mkdir -p "$OUTPUT_DIR"
@@ -87,6 +104,15 @@ for f in "$DUNMIRE_GEOJSON" "$DUNMIRE_NC"; do
         exit 1
     fi
 done
+# Stage-2 labels CSV must exist NOW (before the long build) so we never
+# burn an 18h+ build only to have the embed step fail for a missing file.
+if [ ! -f "$LABELS_CSV" ]; then
+    echo "ERROR: labels CSV not found: $LABELS_CSV"
+    echo "Stage the canonical labels_${REGION}_${YEAR}.csv there, or pass"
+    echo "LABELS_DIR=/path at submit. Aborting before the build."
+    exit 1
+fi
+echo "LabelsCSV:  $LABELS_CSV"
 
 # --- Load modules ---
 ml system
@@ -213,7 +239,47 @@ python3 -u "$REPO_DIR/engine/stacking/build_stacks.py" \
     --boundary_geojson "$DUNMIRE_GEOJSON" \
     --ndwi_min 0.3
 
-EXIT_CODE=$?
+BUILD_RC=$?
+
+NC_COUNT=$(ls "$OUTPUT_DIR/"*.nc 2>/dev/null | wc -l)
+echo ""
+echo "=============================================="
+echo "STAGE 1 (build) done: $(date)  rc=$BUILD_RC  stacks=$NC_COUNT"
+echo "=============================================="
+
+# =============================================================================
+# STAGE 2 — embed expert 5-class drainage labels (in place, CF-1.8 append)
+# =============================================================================
+# Idempotent: files that already have drainage_label are skipped, so this
+# is safe even if the build only partially completed (resume continues it).
+echo ""
+echo ">>> STAGE 2: embed labels  ($LABELS_CSV)"
+python3 -u "$REPO_DIR/engine/labeling/add_labels_to_stacks.py" \
+    --stacks_dir "$OUTPUT_DIR" \
+    --labels_csv "$LABELS_CSV" \
+    --id_col lake_id \
+    --workers 8
+LABELS_RC=$?
+echo "STAGE 2 (labels) done: $(date)  rc=$LABELS_RC"
+
+# =============================================================================
+# STAGE 3 — CF-1.8 validation of the now label-complete dir (authoritative)
+# =============================================================================
+# cfchecker is the authoritative gate; load udunits + install it so the
+# real checker runs (cf_check degrades to structural-only if unavailable).
+ml udunits 2>/dev/null || ml udunits2 2>/dev/null || \
+    echo "NOTE: no udunits module — cfchecker may be unavailable; " \
+         "structural audit still runs."
+pip install --user cfchecker >/dev/null 2>&1 || true
+export PATH="$HOME/.local/bin:$PATH"
+echo ""
+echo ">>> STAGE 3: cf-check  (cfchecks on PATH: $(command -v cfchecks || echo 'NO — structural only'))"
+python3 -u "$REPO_DIR/engine/validation/cf_check.py" \
+    "$OUTPUT_DIR" \
+    --version 1.8 \
+    --workers 16
+CF_RC=$?
+echo "STAGE 3 (cf-check) done: $(date)  rc=$CF_RC"
 
 END_TIME=$(date +%s)
 DURATION_SEC=$((END_TIME - START_TIME))
@@ -221,14 +287,21 @@ DURATION_MIN=$((DURATION_SEC / 60))
 DURATION_HR=$((DURATION_MIN / 60))
 DURATION_MIN_REM=$((DURATION_MIN % 60))
 
+# Overall: build is foundational, cf-check is the authoritative sign-off.
+# Surface the first nonzero so a failed run is never reported green.
+OVERALL=0
+[ "$BUILD_RC" -ne 0 ] && OVERALL=$BUILD_RC
+[ "$OVERALL" -eq 0 ] && [ "$LABELS_RC" -ne 0 ] && OVERALL=$LABELS_RC
+[ "$OVERALL" -eq 0 ] && [ "$CF_RC" -ne 0 ] && OVERALL=$CF_RC
+
+NC_COUNT=$(ls "$OUTPUT_DIR/"*.nc 2>/dev/null | wc -l)
 echo ""
 echo "=============================================="
 echo "End time: $(date)"
 echo "Duration: ${DURATION_HR}h ${DURATION_MIN_REM}m"
-echo "Exit code: $EXIT_CODE"
-
-NC_COUNT=$(ls "$OUTPUT_DIR/"*.nc 2>/dev/null | wc -l)
-echo "Stacks built: $NC_COUNT"
+echo "Stacks:   $NC_COUNT  ($OUTPUT_DIR)"
+echo "rc:  build=$BUILD_RC  labels=$LABELS_RC  cf-check=$CF_RC"
+echo "OVERALL exit: $OVERALL   (0 = built + labeled + CF-1.8 signed off)"
 echo "=============================================="
 
-exit $EXIT_CODE
+exit $OVERALL

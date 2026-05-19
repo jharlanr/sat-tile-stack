@@ -91,6 +91,33 @@ NDWI_FROM_STACK_ATTRS = {
     "references": "Dunmire et al. (2021); Dunmire et al. (2025)",
 }
 
+# Paper Sect. 2.4 taxonomy order — index = flag value. Do not reorder.
+DRAINAGE_CLASSES = ("ND", "HF", "MD", "LD", "CD")
+
+DRAINAGE_LABEL_ATTRS = {
+    "long_name": "expert-assigned drainage mechanism (argmax of soft label)",
+    "flag_values": np.array([0, 1, 2, 3, 4], dtype=np.int8),
+    "flag_meanings": ("no_drainage hydrofracture moulin_drainage "
+                      "lateral_drainage crevasse_drainage"),
+    "comment": (
+        "Canonical hard label (lead author), argmax over the 5-class soft "
+        "probability vector; ties broken toward the lower class index. "
+        "Class order ND HF MD LD CD = 0..4 (Rines et al., Sect. 2.4)."
+    ),
+}
+
+LABEL_PROBABILITY_ATTRS = {
+    "long_name": "expert soft label (per-class probability)",
+    "units": "1",
+    "valid_range": np.array([0.0, 1.0], dtype="float32"),
+    "comment": (
+        "Discrete probability over the 5 drainage classes (0.25 "
+        "granularity, sums to 1). Indexed by `class`; class codes in the "
+        "`class_name` auxiliary coordinate. Soft companion to the hard "
+        "`drainage_label`."
+    ),
+}
+
 
 # ---------------------------------------------------------------------------
 # Public API
@@ -422,6 +449,131 @@ def add_scalar_series(
     }
 
 
+def add_labels(
+    input_nc,
+    output_nc,
+    *,
+    labels_csv,
+    lake_id: str,
+    id_col: str = "lake_id",
+) -> dict:
+    """Append the expert 5-class drainage label to the stack, IN PLACE,
+    without reading or rewriting any existing variable.
+
+    Uses a direct NetCDF append (``netCDF4`` mode ``'a'``): only the small
+    label objects below are created; ``reflectance`` / ``cloud_mask`` /
+    ``water_mask_ndwi`` / ``lake_boundary`` / ``p_water`` and all coords
+    are left byte-for-byte untouched (so their CF-1.8 conformance is
+    preserved by construction — we never decode/re-encode them).
+
+      * ``drainage_label``    scalar ``int8`` CF flag variable (hard label)
+      * ``label_probability`` ``(class)`` float32 soft vector
+      * ``class``             ``(class)`` int32 index coordinate
+      * ``class_name``        ``(class)`` CF char array (NOT NC_STRING)
+      * ``drainage_label`` / ``drainage_notes`` / ``label_flagged`` /
+        ``label_source`` → global attrs
+
+    Idempotent: a file that already has ``drainage_label`` is left as-is.
+    3-rater inter-rater labels are intentionally NOT embedded (sparse;
+    they stay in the sidecar IRR CSVs).
+    """
+    import shutil
+    import netCDF4
+
+    input_nc, output_nc = Path(input_nc), Path(output_nc)
+    output_nc.parent.mkdir(parents=True, exist_ok=True)
+
+    df = pd.read_csv(labels_csv, dtype={id_col: str})
+    sel = df[df[id_col].astype(str) == str(lake_id)]
+    if sel.empty:
+        raise KeyError(
+            f"{lake_id!r} not in {Path(labels_csv).name} "
+            f"(col {id_col!r}, n={len(df)})"
+        )
+    row = sel.iloc[0]
+
+    classes = DRAINAGE_CLASSES
+    hard = str(row["label"]).strip().upper()
+    if hard not in classes:
+        raise ValueError(
+            f"{lake_id}: unknown label {hard!r} (expected {classes})"
+        )
+    lbl_idx = int(classes.index(hard))
+    pvec = np.array([float(row[f"p_{c}"]) for c in classes], dtype="float32")
+    _notes_raw = row.get("notes", "")
+    notes = "" if pd.isna(_notes_raw) else str(_notes_raw).strip()
+    flagged = str(row.get("flagged", "")).strip().lower() in (
+        "true", "1", "yes")
+
+    # output == input -> true in-place append (no copy, no bulk I/O).
+    # output != input -> copy the file once, append to the copy (the big
+    # arrays are copied verbatim, never decoded).
+    if output_nc != input_nc:
+        shutil.copyfile(input_nc, output_nc)  # data only; no chflags/meta
+
+    nclass = len(classes)
+    slen = max(len(c) for c in classes)
+
+    with netCDF4.Dataset(output_nc, "a") as nc:
+        if "drainage_label" in nc.variables:
+            return {
+                "input": str(input_nc), "output": str(output_nc),
+                "lake_id": str(lake_id), "label": hard,
+                "label_index": lbl_idx, "status": "exists",
+            }
+        if "class" not in nc.dimensions:
+            nc.createDimension("class", nclass)
+        if "class_strlen" not in nc.dimensions:
+            nc.createDimension("class_strlen", slen)
+
+        if "class" not in nc.variables:
+            cv = nc.createVariable("class", "i4", ("class",))
+            cv.long_name = "drainage class index"
+            cv[:] = np.arange(nclass, dtype="int32")
+        if "class_name" not in nc.variables:
+            cn = nc.createVariable("class_name", "S1",
+                                   ("class", "class_strlen"))
+            cn.long_name = "drainage class code"
+            cn[:] = netCDF4.stringtochar(
+                np.array(classes, dtype=f"S{slen}"))
+
+        lp = nc.createVariable("label_probability", "f4", ("class",))
+        lp.long_name = LABEL_PROBABILITY_ATTRS["long_name"]
+        lp.units = "1"
+        lp.valid_range = np.array([0.0, 1.0], dtype="f4")
+        lp.comment = LABEL_PROBABILITY_ATTRS["comment"]
+        lp.coordinates = "class_name"          # CF labelled-axis aux coord
+        lp[:] = pvec
+
+        dl = nc.createVariable("drainage_label", "i1")
+        dl.long_name = DRAINAGE_LABEL_ATTRS["long_name"]
+        dl.flag_values = np.array([0, 1, 2, 3, 4], dtype="i1")
+        dl.flag_meanings = DRAINAGE_LABEL_ATTRS["flag_meanings"]
+        dl.comment = DRAINAGE_LABEL_ATTRS["comment"]
+        dl[...] = np.int8(lbl_idx)
+
+        nc.setncattr("drainage_label", hard)
+        nc.setncattr("drainage_notes", notes)
+        nc.setncattr("label_flagged", int(flagged))
+        nc.setncattr("label_source",
+                     "manual 5-class drainage labeling, lead author "
+                     "(Rines et al., Sect. 2.4); inter-rater labels in "
+                     "sidecar CSV")
+        _stamp = pd.Timestamp.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
+        _prev = nc.getncattr("history") if "history" in nc.ncattrs() else ""
+        nc.setncattr(
+            "history",
+            (f"{_prev}\n" if _prev else "")
+            + f"{_stamp}: embedded expert drainage label")
+
+    return {
+        "input": str(input_nc), "output": str(output_nc),
+        "lake_id": str(lake_id), "label": hard, "label_index": lbl_idx,
+        "p": [round(float(v), 4) for v in pvec], "flagged": bool(flagged),
+        "status": "added",
+    }
+
+
 # ---------------------------------------------------------------------------
 # Internals
 # ---------------------------------------------------------------------------
@@ -632,6 +784,20 @@ def _main_scalar(argv=None):
         lake_id=a.lake_id, target_var=a.target_var), indent=2))
 
 
+def _main_labels(argv=None):
+    p = argparse.ArgumentParser(
+        description="embed the expert 5-class drainage label")
+    p.add_argument("--input", required=True)
+    p.add_argument("--output", required=True)
+    p.add_argument("--labels-csv", required=True)
+    p.add_argument("--lake-id", required=True)
+    p.add_argument("--id-col", default="lake_id")
+    a = p.parse_args(argv)
+    print(json.dumps(add_labels(
+        a.input, a.output, labels_csv=a.labels_csv,
+        lake_id=a.lake_id, id_col=a.id_col), indent=2))
+
+
 if __name__ == "__main__":
     import sys
 
@@ -645,6 +811,8 @@ if __name__ == "__main__":
         _main_polygon(rest)
     elif sub == "scalar":
         _main_scalar(rest)
+    elif sub == "labels":
+        _main_labels(rest)
     else:
         print("usage: python -m sat_tile_stack.coregister "
-              "{zarr|ndwi|polygon|scalar} --help")
+              "{zarr|ndwi|polygon|scalar|labels} --help")

@@ -9,7 +9,7 @@ from .visualize import timestack_to_movie, export_frame, multi_panel_frame, batc
 from .utils import combo_scaler, cloud_pix_mask, SCL_CLOUDY_CLASSES
 from .coregister import (
     add_raster_zarr, add_ndwi_mask, add_ndwi_from_stack,
-    add_static_polygon, add_scalar_series,
+    add_static_polygon, add_scalar_series, add_labels,
 )
 # NB: import the batch fn under an alias — a bare `cf_check` here would
 # shadow the `sat_tile_stack.cf_check` submodule (same name) and break
@@ -26,7 +26,7 @@ __all__ = [
     "timestack_to_movie", "export_frame", "multi_panel_frame", "batch_movies",
     "combo_scaler", "cloud_pix_mask", "SCL_CLOUDY_CLASSES",
     "add_raster_zarr", "add_ndwi_mask", "add_ndwi_from_stack",
-    "add_static_polygon", "add_scalar_series",
+    "add_static_polygon", "add_scalar_series", "add_labels",
     "quick_cf_audit", "check_file", "cf_check_paths",
     "append_band", "append_timeseries", "append_metadata",
     "FeatureTracker",
