@@ -27,7 +27,7 @@ import re
 import shutil
 import subprocess
 import sys
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ProcessPoolExecutor
 
 import numpy as np
 import xarray as xr
@@ -179,35 +179,45 @@ def _expand(paths):
     return files
 
 
+def _check_one(task):
+    """Validate a single file (module-level so it is picklable for the
+    process pool). ``task`` = ``(path, version, have_cfchecks, quick)``."""
+    f, version, have_cfchecks, quick = task
+    r = {"path": f}
+    if quick:
+        qi = quick_cf_audit(f)
+        r["quick_errors"] = [m for lvl, m in qi if lvl == "ERROR"]
+        r["quick_warnings"] = [m for lvl, m in qi if lvl == "WARN"]
+    if have_cfchecks:
+        try:
+            cr = check_file(f, version=version)
+            r["cf_errors"] = cr["n_errors"]
+            r["cf_warnings"] = cr["n_warnings"]
+            r["cf_output"] = cr["output"]
+        except Exception as e:  # noqa: BLE001
+            r["cf_error_msg"] = str(e)
+    return r
+
+
 def cf_check(paths, version="1.8", workers=8, quick=True):
     """Validate files/dirs. Always runs the structural audit; additionally
     runs ``cfchecker`` when available.
 
-    Returns ``(all_ok, results)`` where each result has ``path``,
-    ``quick_errors``/``quick_warnings`` and (if cfchecker ran) ``cf_errors``.
+    Uses a **process** pool, not threads: each worker opens NetCDF via
+    ``xr.open_dataset`` → libhdf5, and netCDF4/HDF5 is NOT thread-safe.
+    16 threads opening files concurrently segfaults the interpreter
+    (observed on Sherlock, job 25416436, exit 139, ~13 s, no output).
+    Separate processes have independent HDF5 state — safe, and the same
+    pattern ``add_labels_to_stacks.py`` already uses over these files.
+
+    Returns ``(all_ok, results, have_cfchecks)``.
     """
     files = _expand(list(paths))
     have_cfchecks = _cfchecks_exe() is not None
-    results = []
+    tasks = [(f, version, have_cfchecks, quick) for f in files]
 
-    def _one(f):
-        r = {"path": f}
-        if quick:
-            qi = quick_cf_audit(f)
-            r["quick_errors"] = [m for lvl, m in qi if lvl == "ERROR"]
-            r["quick_warnings"] = [m for lvl, m in qi if lvl == "WARN"]
-        if have_cfchecks:
-            try:
-                cr = check_file(f, version=version)
-                r["cf_errors"] = cr["n_errors"]
-                r["cf_warnings"] = cr["n_warnings"]
-                r["cf_output"] = cr["output"]
-            except Exception as e:  # noqa: BLE001
-                r["cf_error_msg"] = str(e)
-        return r
-
-    with ThreadPoolExecutor(max_workers=max(1, workers)) as ex:
-        results = list(ex.map(_one, files))
+    with ProcessPoolExecutor(max_workers=max(1, workers)) as ex:
+        results = list(ex.map(_check_one, tasks))
 
     all_ok = True
     for r in results:
