@@ -61,7 +61,7 @@ DUNMIRE_NC="/oak/stanford/groups/cyaolai/JoshRines/data/dunmire/all_lakes_${YEAR
 # v2 CF-1.8 rebuild lands in a fresh tree; v1 stacks/ stays untouched as a
 # fallback until v2 passes validation (see sat-tile-stack/claudiary/20260508F).
 OUTPUT_DIR="$SHERLOCK_DIR/stacks_v2/${REGION}_${YEAR}"
-EXTRACT_CSV="$SHERLOCK_DIR/stacks/${REGION}_${YEAR}_centroids.csv"
+EXTRACT_CSV="$SHERLOCK_DIR/stacks_v2/${REGION}_${YEAR}_centroids.csv"
 
 mkdir -p "$SHERLOCK_DIR/logs"
 mkdir -p "$OUTPUT_DIR"
