@@ -55,10 +55,9 @@ fi
 REPO_DIR="/oak/stanford/groups/cyaolai/JoshRines/repos/sat-tile-stack"
 SHERLOCK_DIR="/oak/stanford/groups/cyaolai/JoshRines/sherlock/sherlock_sattilestack"
 DUNMIRE_GEOJSON="$REPO_DIR/labeling/dunmire/labels_${YEAR}_volumes.geojson"
-# Dunmire 2025 per-lake daily series (p_water source). CONFIRM/EDIT this path
-# on Sherlock before submitting — must contain an `ids` coord with this
-# region's lake IDs and an `S2_water` variable.
-DUNMIRE_NC="$SHERLOCK_DIR/dunmire/all_lakes_${YEAR}.nc"
+# Dunmire 2025 per-lake daily series (p_water source): canonical OAK data
+# location (has `ids` coord with this region's lake IDs + `S2_water`).
+DUNMIRE_NC="/oak/stanford/groups/cyaolai/JoshRines/data/dunmire/all_lakes_${YEAR}.nc"
 # v2 CF-1.8 rebuild lands in a fresh tree; v1 stacks/ stays untouched as a
 # fallback until v2 passes validation (see sat-tile-stack/claudiary/20260508F).
 OUTPUT_DIR="$SHERLOCK_DIR/stacks_v2/${REGION}_${YEAR}"
