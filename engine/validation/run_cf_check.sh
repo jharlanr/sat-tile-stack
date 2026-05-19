@@ -54,12 +54,18 @@ ml python/3.12.1
 ml py-numpy/1.26.3_py312
 ml py-pandas/2.2.1_py312
 ml py-scipy/1.12.0_py312
-# UDUNITS2 backs the standard cfchecker; load it if a module exists so the
-# authoritative checker runs (otherwise cf_check gracefully degrades to the
-# dependency-free structural audit only).
-ml udunits 2>/dev/null || ml udunits2 2>/dev/null || \
-    echo "NOTE: no udunits module found — cfchecker may be unavailable; " \
-         "structural audit still runs."
+# UDUNITS2 backs the standard cfchecker. On Sherlock the module is
+# `udunits/2.2.26` under the `physics` hierarchy (no `udunits2`; a bare
+# `ml udunits` fails until `physics` is loaded). Without libudunits2.so a
+# pip-installed cfchecks SEGFAULTS rather than degrading — load the
+# hierarchy parent then the module so the C lib resolves.
+ml physics 2>/dev/null && ml udunits/2.2.26 2>/dev/null
+if ml list 2>&1 | grep -qi udunits; then
+    echo "udunits module loaded ($(ml list 2>&1 | grep -oi 'udunits/[0-9.]*'))"
+else
+    echo "NOTE: udunits/2.2.26 did NOT load — cfchecker may be unavailable;"
+    echo "      structural audit still runs."
+fi
 
 pip install --user xarray netcdf4 pyproj cfchecker >/dev/null 2>&1 || true
 export PATH="$HOME/.local/bin:$PATH"

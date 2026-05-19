@@ -265,11 +265,19 @@ echo "STAGE 2 (labels) done: $(date)  rc=$LABELS_RC"
 # =============================================================================
 # STAGE 3 — CF-1.8 validation of the now label-complete dir (authoritative)
 # =============================================================================
-# cfchecker is the authoritative gate; load udunits + install it so the
-# real checker runs (cf_check degrades to structural-only if unavailable).
-ml udunits 2>/dev/null || ml udunits2 2>/dev/null || \
-    echo "NOTE: no udunits module — cfchecker may be unavailable; " \
-         "structural audit still runs."
+# UDUNITS2 backs the authoritative cfchecks. On Sherlock the module is
+# `udunits/2.2.26` and it lives UNDER the `physics` hierarchy — there is
+# no `udunits2`, and a bare `ml udunits` fails until `physics` is loaded.
+# If cfchecks is pip-installed but libudunits2.so is absent it does not
+# degrade gracefully — it SEGFAULTS (job 25413767 stage-3 rc=139). Load
+# the hierarchy parent then the module so the C lib resolves.
+ml physics 2>/dev/null && ml udunits/2.2.26 2>/dev/null
+if ml list 2>&1 | grep -qi udunits; then
+    echo "udunits module loaded ($(ml list 2>&1 | grep -oi 'udunits/[0-9.]*'))"
+else
+    echo "NOTE: udunits/2.2.26 did NOT load — cfchecks may be unavailable;"
+    echo "      cf_check still runs its dependency-free structural audit."
+fi
 pip install --user cfchecker >/dev/null 2>&1 || true
 export PATH="$HOME/.local/bin:$PATH"
 echo ""
@@ -287,12 +295,34 @@ DURATION_MIN=$((DURATION_SEC / 60))
 DURATION_HR=$((DURATION_MIN / 60))
 DURATION_MIN_REM=$((DURATION_MIN % 60))
 
-# Overall: build is foundational, cf-check is the authoritative sign-off.
-# Surface the first nonzero so a failed run is never reported green.
+# Build + labels are the durable, expensive work. cf-check is read-only
+# and re-runnable. Its exit codes:
+#   0      = CLEAN (built + labeled + CF-1.8 signed off in one job)
+#   1      = cf_check RAN and found real CF errors  -> fail OVERALL
+#   >=126  = it CRASHED / couldn't run (e.g. 139 SIGSEGV from a broken
+#            UDUNITS env) -> infra problem, NOT a data problem; build+
+#            labels stay durable, so WARN and let OVERALL reflect
+#            build/labels. Get the authoritative sign-off via the
+#            standalone run_cf_check.sh.
 OVERALL=0
 [ "$BUILD_RC" -ne 0 ] && OVERALL=$BUILD_RC
 [ "$OVERALL" -eq 0 ] && [ "$LABELS_RC" -ne 0 ] && OVERALL=$LABELS_RC
-[ "$OVERALL" -eq 0 ] && [ "$CF_RC" -ne 0 ] && OVERALL=$CF_RC
+CF_NOTE="CF-1.8 signed off"
+if [ "$OVERALL" -eq 0 ]; then
+    if [ "$CF_RC" -eq 0 ]; then
+        :
+    elif [ "$CF_RC" -ge 126 ]; then
+        CF_NOTE="CF-check CRASHED (rc=$CF_RC) — env, not data; build+labels durable"
+        echo ""
+        echo "WARNING: cf-check crashed (rc=$CF_RC, likely UDUNITS/cfchecks"
+        echo "         environment, not the data). Build + labels are durable."
+        echo "         Authoritative sign-off: sbatch engine/validation/"
+        echo "         run_cf_check.sh ${REGION} ${YEAR}"
+    else
+        OVERALL=$CF_RC
+        CF_NOTE="CF errors found (cf_check rc=$CF_RC)"
+    fi
+fi
 
 NC_COUNT=$(ls "$OUTPUT_DIR/"*.nc 2>/dev/null | wc -l)
 echo ""
@@ -301,7 +331,7 @@ echo "End time: $(date)"
 echo "Duration: ${DURATION_HR}h ${DURATION_MIN_REM}m"
 echo "Stacks:   $NC_COUNT  ($OUTPUT_DIR)"
 echo "rc:  build=$BUILD_RC  labels=$LABELS_RC  cf-check=$CF_RC"
-echo "OVERALL exit: $OVERALL   (0 = built + labeled + CF-1.8 signed off)"
+echo "OVERALL exit: $OVERALL   ($CF_NOTE)"
 echo "=============================================="
 
 exit $OVERALL
