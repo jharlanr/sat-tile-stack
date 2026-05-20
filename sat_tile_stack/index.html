@@ -241,49 +241,50 @@
         The label is automatically set to the class with the highest probability (argmax).
         Use probability splits (e.g., 0.50/0.50) when uncertain. Flag ambiguous cases for revisit.</p>
 
-        <h3 style="color:#4488cc; margin:12px 0 6px;">ND — No Drainage</h3>
+        <h3 style="color:#4488cc; margin:12px 0 6px;">ND — No drainage</h3>
         <ul style="padding-left:20px; margin:4px 0;">
-            <li>Lake does not drain its water in any way (laterally or englacially)</li>
-            <li>If there is <em>any</em> outlet stream, even a small one, it is <strong>not</strong> ND — that would be LD</li>
-            <li>A lake can still be ND even if streams are visible — if those streams flow <strong>into</strong> the lake (inlets), not out of it</li>
-            <li>To distinguish inlet vs outlet: streams generally taper from wide to narrow in the direction of flow, but this can be tricky — check whether the lake level drops over time (outlet/drainage) or stays stable/rises (inlet only, likely ND)</li>
+            <li>Lake does not drain its water in any way (laterally or englacially).</li>
+            <li>If there is <em>any</em> outlet stream, even a small one, it is <strong>not</strong> ND; that would be LD.</li>
+            <li>A lake can still be ND even if streams are visible, as long as those streams flow <strong>into</strong> the lake (inlets), not out of it.</li>
+            <li>To distinguish inlet vs. outlet: streams generally taper from wide to narrow in the direction of flow, but this can be tricky, so check whether the lake level drops over time (outlet/drainage) or stays stable/rises (inlet only, likely ND).</li>
         </ul>
 
-        <h3 style="color:#4488cc; margin:12px 0 6px;">HF — Hydrofracture</h3>
+        <h3 style="color:#4488cc; margin:12px 0 6px;">HF — Hydrofracture (rapid in-basin drainage)</h3>
         <ul style="padding-left:20px; margin:4px 0;">
-            <li>Rapid drainage (typically <strong>&lt;4 days</strong>) with water leaving <strong>mostly within the lake extent</strong> — not via a long outlet stream</li>
-            <li>Supporting cues: fracture scarps, ice chunks, sudden area decrease. <strong>A visible scarp is not required.</strong></li>
-            <li><strong>Default to HF</strong> when drainage is rapid and mostly in-basin, even without a clean scarp: you cannot demonstrate it was <em>not</em> a hydrofracture, and the imagery already shows evidence of a rapid englacial event</li>
-            <li>A moulin observed in or near the basin during/after rapid in-basin drainage may have been <em>spawned by</em> the HF event (HF events often open new moulins). Visible moulin + rapid in-basin drainage → HF, not MD</li>
-            <li>If truly unclear HF vs MD → label as HF and flag for revisit</li>
+            <li>Rapid drainage (typically &lt;4 days) where water leaves <strong>mostly within the lake extent</strong>, not via a long outlet stream.</li>
+            <li><em>Supporting cues</em>: fracture scarps, ice chunks (calved blocks), sudden area decrease.</li>
+            <li><strong>A visible scarp is not required.</strong> Sentinel-2 is 10&nbsp;m/pixel, but a hydrofracture itself may be only meters wide in its across-crack direction, so the crack is often sub-pixel.</li>
+            <li><strong>Default to HF</strong> when drainage is rapid and mostly in-basin, even without a clean scarp: the imagery already shows evidence of a rapid englacial event, and you cannot demonstrate it <em>was not</em> a hydrofracture.</li>
+            <li><strong>Moulin tie-breaker</strong>: a moulin observed in or near the basin during or after rapid in-basin drainage was possibly spawned by the HF event (HF events often open new moulins). Visible moulin + rapid in-basin drainage → HF, not MD.</li>
+            <li>If truly unclear HF vs. MD → label as HF and flag for revisit.</li>
         </ul>
 
-        <h3 style="color:#4488cc; margin:12px 0 6px;">MD — Moulin Drainage</h3>
+        <h3 style="color:#4488cc; margin:12px 0 6px;">MD — Moulin drainage</h3>
         <ul style="padding-left:20px; margin:4px 0;">
-            <li>Drainage into a moulin (vertical channel into the ice)</li>
-            <li>Tends to be <strong>slower</strong> than hydrofracture</li>
-            <li>Moulin is often <strong>outside</strong> the lake extent — don't confuse with lateral drainage</li>
-            <li>Moulin must be visible within the 512×512 frame (water disappears into ice in-frame)</li>
-            <li>Moulins sometimes become more obvious later in season after snow falls</li>
-            <li>If a lake drains via outlet stream that terminates in a moulin → label as MD</li>
-            <li>If a lake drains via stream AND separately into a moulin → label as MD</li>
+            <li>Drainage into a moulin (vertical channel into the ice).</li>
+            <li>Tends to be <strong>slower</strong> than hydrofracture.</li>
+            <li>Moulin is often <strong>outside</strong> the lake extent; do not confuse with lateral drainage.</li>
+            <li>Moulin must be visible within the 512×512 frame (water disappears into ice in-frame).</li>
+            <li>Moulins sometimes become more obvious later in the season after snow falls.</li>
+            <li>If a lake drains via an outlet stream that terminates in a moulin → label as MD.</li>
+            <li>If a lake drains via stream AND separately into a moulin → label as MD.</li>
         </ul>
 
-        <h3 style="color:#4488cc; margin:12px 0 6px;">LD — Lateral Drainage</h3>
+        <h3 style="color:#4488cc; margin:12px 0 6px;">LD — Lateral drainage</h3>
         <ul style="padding-left:20px; margin:4px 0;">
-            <li>Lake drains via an outlet stream or slush field</li>
-            <li>If the outlet stream meanders out of frame (even if it might end in a moulin) → LD</li>
-            <li>Lake-to-lake drainage is always LD — if a lake drains into another lake's basin, even if that neighboring lake drains via HF or moulin, the source lake is LD</li>
-            <li>If a lake sits in a crevasse field but clearly drains via outlet stream → LD, not CD</li>
+            <li>Lake drains via an outlet stream or slush field.</li>
+            <li>If the outlet stream meanders out of frame (even if it might end in a moulin) → LD.</li>
+            <li>Lake-to-lake drainage is always LD: if a lake drains into another lake's basin, even if that neighboring lake drains via HF or moulin, the source lake is LD.</li>
+            <li>If a lake sits in a crevasse field but clearly drains via an outlet stream → LD, not CD.</li>
         </ul>
 
-        <h3 style="color:#4488cc; margin:12px 0 6px;">CD — Crevasse Drainage</h3>
+        <h3 style="color:#4488cc; margin:12px 0 6px;">CD — Crevasse drainage</h3>
         <ul style="padding-left:20px; margin:4px 0;">
-            <li>Lake drains into a crevasse field</li>
-            <li>Catastrophic HF-like drainage in a crevasse field → still CD</li>
-            <li>Lake just outside/touching a crevasse field that drains → CD</li>
-            <li>Lake drains via stream <strong>into</strong> a crevasse field → CD</li>
-            <li>Lake in crevasse field but clearly drains via outlet stream out of frame → LD, not CD</li>
+            <li>Lake drains into a crevasse field.</li>
+            <li>Catastrophic HF-like drainage in a crevasse field → still CD.</li>
+            <li>Lake just outside/touching a crevasse field that drains → CD.</li>
+            <li>Lake drains via a stream <strong>into</strong> a crevasse field → CD.</li>
+            <li>Lake in a crevasse field but clearly drains via an outlet stream out of frame → LD, not CD.</li>
         </ul>
 
         <h3 style="color:#4488cc; margin:12px 0 6px;">Controls</h3>
