@@ -2,7 +2,15 @@
 
 NOTE: this repo is under active development
 
-`sat_tile_stack` is a package for constructing deep learning-ready datasets from satellite imagery.  Built on `Microsoft Planetary Computer` and `stackstac`, `sat_tile_stack` enables users to compile time-series datasets at regular cadence (e.g., daily).  Functional options include tracking cloudiness, imagery availability, and spatial mask generation at that same cadence for ease of use in attention-enabled deep learning frameworks.
+`sat-tile-stack` builds deep-learning-ready satellite time-stacks from a STAC
+catalog and ships them as **per-area, CF-1.8 NetCDFs**. Built on Microsoft
+Planetary Computer and `stackstac`, with optional co-registration of
+auxiliary raster/vector/scalar layers onto each stack, an in-browser
+labeling GUI, and a CF-1.8 validator. Originally developed for the
+supraglacial-lake drainage benchmark accompanying Rines et al. (ESSD, in
+review).
+
+![pipeline](docs/fig2_datapipeline.png)
 
 ## Installation and Dependencies
 For now, `sat_tile_stack` can be installed via
@@ -10,9 +18,52 @@ For now, `sat_tile_stack` can be installed via
 pip install --upgrade --force-reinstall git+https://github.com/jharlanr/sat-tile-stack.git
 ```
 
-## Example usage
-Check out a brief tutorial [here](https://github.com/CryoInTheCloud/CryoCloudWebsite/blob/main/book/tutorials/dask_for_geoscientists.ipynb)
+Optional extras:
+- `pip install "sat-tile-stack[labeling]"` — Flask backend for the `lakelabel` GUI
+- `pip install "sat-tile-stack[validation]"` — pulls `cfchecker` for the authoritative CF-1.8 validator
 
+## Pipeline
+
+Four per-area, resume-safe stages. Every writer goes through
+`io.write_netcdf` (atomic temp-rename + CF finalize), so a crashed run
+can't corrupt a good file. Each stage is also idempotent, so a SLURM
+array can fan out across many areas and rerun freely.
+
+| Stage | Entry point | What it adds to the per-area `.nc` |
+|---|---|---|
+| **1. Stack** | `stack.sattile_stack(...)` | `reflectance(time, band, y, x)` + `cloud_mask(time, y, x)` |
+| **2. Co-register** | `coregister.add_ndwi_from_stack`, `add_static_polygon`, `add_scalar_series`, `add_raster_zarr` | top-level CF variables (e.g. `water_mask_ndwi`, `lake_boundary`, `p_water`) |
+| **3. Label** *(optional)* | `coregister.add_labels` (in-place NetCDF append) — or `lakelabel` (browser GUI for human labeling) | scalar `drainage_label` + `label_probability(class)` soft vector |
+| **4. Validate** | `cf_check.cf_check(paths, ...)` — or `sts-cf-check` CLI | dependency-free structural audit + authoritative `cfchecker` when installed |
+
+Per-area SLURM drivers for an end-to-end build (stack → coregister → labels →
+cf-check, in one job) live under `engine/{stacking,labeling,validation}/`.
+
+## Example usage
+
+Build a 153-day daily Sentinel-2 RGB+NIR stack around one point:
+
+```python
+import pystac_client, planetary_computer
+from sat_tile_stack import sattile_stack
+
+catalog = pystac_client.Client.open(
+    "https://planetarycomputer.microsoft.com/api/stac/v1",
+    modifier=planetary_computer.sign_inplace,
+)
+da = sattile_stack(
+    catalog,
+    centroid=(-49.5, 67.5),                # (lon, lat)
+    band_names=["B04", "B03", "B02", "B08"],
+    collection="sentinel-2-l2a",
+    time_range="2019-05-01/2019-09-30",
+    cadence="D",
+    cloudmask=True,
+)
+```
+
+See [`docs/LABELING_FOR_COLLABORATORS.md`](docs/LABELING_FOR_COLLABORATORS.md)
+for end-to-end labeling instructions with the `lakelabel` GUI.
 
 ## Supported Satellite Products
 
@@ -57,7 +108,9 @@ The `pix_res` parameter controls the output resolution — stackstac will resamp
 | B12 | SWIR 2 | 2190 | 20 | |
 | SCL | Scene Classification | — | 20 | Used by `scl` cloud mask |
 
-Reflectance values are scaled by 10000 (divide by 10000 for physical reflectance 0–1).
+Stored as raw DNs; convert to surface reflectance via
+`rho = (DN + boa_add_offset) / 10000` (the `boa_add_offset` per-timestep
+coord is 0 for processing baseline ≤ 03.00, nonzero for ≥ 04.00).
 
 ### Sentinel-1 GRD IW (`sentinel-1-grd`)
 
