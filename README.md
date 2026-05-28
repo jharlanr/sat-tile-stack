@@ -7,8 +7,8 @@ catalog and ships them as **per-area, CF-1.8 NetCDFs**. Built on Microsoft
 Planetary Computer and `stackstac`, with optional co-registration of
 auxiliary raster/vector/scalar layers onto each stack, an in-browser
 labeling GUI, and a CF-1.8 validator. Originally developed for the
-supraglacial-lake drainage benchmark accompanying Rines et al. (ESSD, in
-review).
+supraglacial-lake drainage benchmark accompanying Rines et al. (ESSD,
+submitted).
 
 ![pipeline](docs/fig2_datapipeline.png)
 
