@@ -65,6 +65,29 @@ da = sattile_stack(
 See [`docs/LABELING_FOR_COLLABORATORS.md`](docs/LABELING_FOR_COLLABORATORS.md)
 for end-to-end labeling instructions with the `lakelabel` GUI.
 
+## Labeling GUI
+
+`lakelabel` is a browser-based labeling tool packaged with `sat-tile-stack`
+(install with the `[labeling]` extra). It walks an analyst through a
+directory of per-area `.nc` stacks one at a time, renders true-color
+Sentinel-2 frames with the static area mask overlaid, and writes soft
+probability vectors to a CSV that mirrors the schema embedded by
+`coregister.add_labels`. Auto-resumes on restart by skipping anything
+already in the labels CSV.
+
+![GUI](docs/fig_gui.png)
+
+Minimal invocation:
+
+```bash
+lakelabel --nc_dir path/to/stacks \
+          --labels_csv my_labels.csv
+```
+
+Add `--lake_list ids.csv` to restrict to a specific subset (useful for
+inter-rater studies), or `--classes ...` to override the default
+5-class taxonomy. Server defaults to <http://localhost:5050>.
+
 ## Supported Satellite Products
 
 `sat-tile-stack` works with any STAC collection via the `collection` parameter. Below are the most common options available on Microsoft Planetary Computer.
