@@ -154,7 +154,7 @@
     <!-- Left: image -->
     <div id="left-panel">
         <div id="image-container">
-            <img id="main-image" src="" alt="" />
+            <div id="deck-viewer" style="position:absolute; inset:0;"></div>
             <div id="image-placeholder" style="
                 position:absolute; top:0; left:0; right:0; bottom:0;
                 display:flex; align-items:center; justify-content:center;
@@ -167,6 +167,12 @@
         <div id="date-label" style="font-size:18px; color:#ddd; font-weight:bold; margin:6px 0;">—</div>
         <div id="frame-slider-container">
             <input type="range" id="frame-slider" min="0" max="0" value="0" />
+        </div>
+        <div id="brightness-container" style="width:100%; padding:2px 10px 0; display:flex; align-items:center; gap:8px;">
+            <span style="font-size:11px; color:#888; white-space:nowrap;">Brightness</span>
+            <input type="range" id="brightness-slider" min="0.5" max="5" step="0.1" value="1.2"
+                   style="flex:1; accent-color:#4488cc; cursor:pointer;" />
+            <span id="brightness-value" style="font-size:11px; color:#aaa; width:28px;">1.2×</span>
         </div>
     </div>
 
@@ -290,16 +296,41 @@
         <h3 style="color:#4488cc; margin:12px 0 6px;">Controls</h3>
         <ul style="padding-left:20px;">
             <li><strong>Scroll wheel</strong> over image — scrub frames</li>
+            <li><strong>Ctrl + scroll</strong> (or trackpad pinch) — zoom toward cursor</li>
+            <li><strong>Drag</strong> — pan &nbsp;·&nbsp; <strong>double-click</strong> — zoom in</li>
             <li><strong>← →</strong> arrow keys — scrub frames</li>
             <li><strong>Enter</strong> — submit & next</li>
         </ul>
     </div>
 </div>
 
+<!-- Register error handlers BEFORE viewer.js so a load-time error in the
+     bundle is captured, and accumulate every error so none is masked. -->
+<script>
+window.__errs = [];
+function showFatal(msg) {
+    window.__errs.push(String(msg));
+    const p = document.getElementById("image-placeholder");
+    if (!p) return;
+    p.style.display = "flex";
+    document.getElementById("placeholder-icon").textContent = "⚠";
+    document.getElementById("placeholder-title").textContent = "Startup error";
+    const sub = document.getElementById("placeholder-subtitle");
+    sub.textContent = window.__errs.join("  ||  ");
+    sub.style.maxWidth = "85%";
+    sub.style.fontSize = "11px";
+}
+window.addEventListener("error", e =>
+    showFatal(`ERR: ${e.message} @ ${(e.filename || "").split("/").pop()}:${e.lineno}`));
+window.addEventListener("unhandledrejection", e =>
+    showFatal("REJECT: " + ((e.reason && (e.reason.stack || e.reason.message)) || e.reason)));
+</script>
+<script src="/static/viewer.js"></script>
 <script>
 // ---------------------------------------------------------------------------
 // State
 // ---------------------------------------------------------------------------
+let viewer = null;      // deck.gl-zarr image-panel widget
 let samples = [];
 let unlabeledIds = [];
 let currentIdx = 0;
@@ -329,6 +360,9 @@ function setStatus(state) {
 // Init
 // ---------------------------------------------------------------------------
 async function init() {
+    // Create the GPU image-panel viewer once.
+    viewer = SatTileViewer.create(document.getElementById("deck-viewer"));
+
     const progressData = await fetch("/api/progress").then(r => r.json());
     classes = progressData.classes;
     buildProbSliders();
@@ -431,7 +465,6 @@ function showAllDone() {
     document.getElementById("btn-skip").disabled = true;
     document.getElementById("btn-back").disabled = true;
     document.getElementById("btn-submit").disabled = true;
-    document.getElementById("main-image").src = "";
     document.getElementById("image-placeholder").style.display = "flex";
     document.getElementById("placeholder-icon").textContent = "✓";
     document.getElementById("placeholder-title").textContent = "All samples labeled";
@@ -466,13 +499,6 @@ async function _loadAndDisplay(id) {
     document.getElementById("frame-slider").disabled = false;
     document.getElementById("image-placeholder").style.display = "none";
 
-    // Reset zoom
-    const img = document.getElementById("main-image");
-    img.style.transform = "scale(1)";
-    img.style.transformOrigin = "center center";
-    img.style.cursor = "grab";
-    isZoomed = false;
-
     // Reset frame slider
     const slider = document.getElementById("frame-slider");
     slider.max = currentInfo.n_frames - 1;
@@ -480,7 +506,18 @@ async function _loadAndDisplay(id) {
     frameIdx = 0;
 
     resetProbs();
-    loadFrame(0);
+
+    // Load this lake's GeoZarr store into the GPU viewer, then show frame 0.
+    try {
+        await viewer.load(`/api/zarr/${encodeURIComponent(id)}`);
+        loadFrame(0);
+    } catch (err) {
+        document.getElementById("image-placeholder").style.display = "flex";
+        document.getElementById("placeholder-icon").textContent = "⚠";
+        document.getElementById("placeholder-title").textContent = "Viewer failed to load";
+        document.getElementById("placeholder-subtitle").textContent = String(err);
+        console.error("viewer.load failed:", err);
+    }
 
     // Load existing label if any
     const labelData = await fetch(`/api/label/${id}`).then(r => r.json());
@@ -511,8 +548,7 @@ async function _loadAndDisplay(id) {
 
 function loadFrame(idx) {
     frameIdx = idx;
-    const img = document.getElementById("main-image");
-    img.src = `/api/frame/${currentId}/${idx}?t=${Date.now()}`;
+    if (viewer) viewer.setFrame(idx);
     document.getElementById("image-placeholder").style.display = "none";
 
     const dateLabel = document.getElementById("date-label");
@@ -529,10 +565,24 @@ document.getElementById("frame-slider").addEventListener("input", function () {
     loadFrame(parseInt(this.value));
 });
 
-// Throttled scroll-to-scrub — one frame per 150ms max (trackpad-friendly)
+// Wheel over the image:
+//   • Ctrl/⌘ + scroll, or trackpad pinch (which fires wheel with ctrlKey) →
+//     zoom the deck viewer toward the cursor.
+//   • plain scroll → scrub frames (throttled, one frame per 150ms).
+// Drag pans; double-click zooms in. This keeps zoom from fighting scrubbing.
 let lastScrollTime = 0;
 document.getElementById("image-container").addEventListener("wheel", function (e) {
     e.preventDefault();
+
+    if (e.ctrlKey || e.metaKey) {
+        if (viewer) {
+            const rect = this.getBoundingClientRect();
+            // scroll up (deltaY < 0) → zoom in
+            viewer.zoomBy(-e.deltaY * 0.01, e.clientX - rect.left, e.clientY - rect.top);
+        }
+        return;
+    }
+
     if (isBusy) return;
     const now = Date.now();
     if (now - lastScrollTime < 150) return;  // throttle
@@ -548,26 +598,11 @@ document.getElementById("image-container").addEventListener("wheel", function (e
     }
 }, { passive: false });
 
-// Double-click to zoom 2x / zoom out
-let isZoomed = false;
-document.getElementById("image-container").addEventListener("dblclick", function (e) {
-    const img = document.getElementById("main-image");
-    if (!isZoomed) {
-        // Zoom in 2x centered on click point
-        const rect = img.getBoundingClientRect();
-        const clickX = (e.clientX - rect.left) / rect.width * 100;
-        const clickY = (e.clientY - rect.top) / rect.height * 100;
-        img.style.transform = "scale(4)";
-        img.style.transformOrigin = `${clickX}% ${clickY}%`;
-        img.style.cursor = "zoom-out";
-        isZoomed = true;
-    } else {
-        // Zoom out
-        img.style.transform = "scale(1)";
-        img.style.transformOrigin = "center center";
-        img.style.cursor = "grab";
-        isZoomed = false;
-    }
+// Brightness slider — live restretch, no server round-trip.
+document.getElementById("brightness-slider").addEventListener("input", function () {
+    const b = parseFloat(this.value);
+    document.getElementById("brightness-value").textContent = b.toFixed(1) + "×";
+    if (viewer) viewer.setBrightness(b);
 });
 
 // Arrow keys
@@ -824,7 +859,6 @@ setInterval(async () => {
         if (!resp.ok) throw new Error();
     } catch {
         document.getElementById("lake-id").textContent = "Server disconnected";
-        document.getElementById("main-image").src = "";
         document.getElementById("image-placeholder").style.display = "flex";
         document.getElementById("placeholder-icon").textContent = "⚠";
         document.getElementById("placeholder-title").textContent = "Server stopped";
