@@ -306,12 +306,24 @@ def api_info(lake_id):
     ensure_zarr(lake_id)
     dates = [np.datetime_as_string(t, unit="D") for t in da.time.values]
     bands = [str(b) for b in da.band.values]
+
+    # Per-frame data availability. A "missing day" (no scene) is one whose RGB
+    # reflectance is entirely NaN — same test the main branch uses to draw a
+    # black frame. The browser shows a full-panel "No data" blank for these.
+    from sat_tile_stack.zarr_export import _band_names, _pick_rgb
+    names = _band_names(da)
+    rgb = _pick_rgb(names)
+    sel = [names.index(n) for n in rgb]
+    rgb_arr = da.isel(band=sel).values  # (time, 3, y, x)
+    has_data = (~np.isnan(rgb_arr).all(axis=(1, 2, 3))).tolist()
+
     return jsonify({
         "id": lake_id,
         "n_frames": len(dates),
         "dates": dates,
         "bands": bands,
         "shape": list(da.shape),
+        "has_data": has_data,
     })
 
 

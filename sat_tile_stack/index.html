@@ -155,6 +155,15 @@
     <div id="left-panel">
         <div id="image-container">
             <div id="deck-viewer" style="position:absolute; inset:0;"></div>
+            <!-- Full-panel blank for missing days (no scene) — matches the
+                 main branch, which renders an all-NaN day as a black frame. -->
+            <div id="nodata-overlay" style="
+                position:absolute; top:0; left:0; right:0; bottom:0; display:none;
+                align-items:center; justify-content:center; flex-direction:column;
+                gap:8px; background:#000; z-index:5;">
+                <div style="font-size:30px; color:#333;">▦</div>
+                <div style="color:#666; font-size:14px; letter-spacing:0.5px;">No data</div>
+            </div>
             <div id="image-placeholder" style="
                 position:absolute; top:0; left:0; right:0; bottom:0;
                 display:flex; align-items:center; justify-content:center;
@@ -465,6 +474,7 @@ function showAllDone() {
     document.getElementById("btn-skip").disabled = true;
     document.getElementById("btn-back").disabled = true;
     document.getElementById("btn-submit").disabled = true;
+    document.getElementById("nodata-overlay").style.display = "none";
     document.getElementById("image-placeholder").style.display = "flex";
     document.getElementById("placeholder-icon").textContent = "✓";
     document.getElementById("placeholder-title").textContent = "All samples labeled";
@@ -551,10 +561,16 @@ function loadFrame(idx) {
     if (viewer) viewer.setFrame(idx);
     document.getElementById("image-placeholder").style.display = "none";
 
+    // Missing days (no scene) show a full-panel blank, like the main branch.
+    const missing = currentInfo && currentInfo.has_data
+        && currentInfo.has_data[idx] === false;
+    document.getElementById("nodata-overlay").style.display = missing ? "flex" : "none";
+
     const dateLabel = document.getElementById("date-label");
     if (currentInfo) {
         dateLabel.textContent =
-            `${currentInfo.dates[idx]}  |  frame ${idx + 1}/${currentInfo.n_frames}`;
+            `${currentInfo.dates[idx]}  |  frame ${idx + 1}/${currentInfo.n_frames}`
+            + (missing ? "  ·  no data" : "");
     }
 }
 
@@ -859,6 +875,7 @@ setInterval(async () => {
         if (!resp.ok) throw new Error();
     } catch {
         document.getElementById("lake-id").textContent = "Server disconnected";
+        document.getElementById("nodata-overlay").style.display = "none";
         document.getElementById("image-placeholder").style.display = "flex";
         document.getElementById("placeholder-icon").textContent = "⚠";
         document.getElementById("placeholder-title").textContent = "Server stopped";

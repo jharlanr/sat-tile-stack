@@ -86,6 +86,12 @@ class SatTileViewerInstance {
   private deck: Deck<MapView>;
   private node: zarr.Array<zarr.DataType, zarr.Readable> | null = null;
   private viewState: ViewState = { longitude: 0, latitude: 0, zoom: 1 };
+  // Centred "home" view for the current store. Frame changes snap the pan back
+  // here (keeping the user's current zoom) so every frame is presented centred.
+  private homeLngLat: { longitude: number; latitude: number } = {
+    longitude: 0,
+    latitude: 0,
+  };
   private frame = 0;
   private brightness = 1.2;
   private zarrUrl = "";
@@ -151,6 +157,10 @@ class SatTileViewerInstance {
       attrs["spatial:shape"],
       attrs["proj:wkt2"],
     );
+    this.homeLngLat = {
+      longitude: this.viewState.longitude,
+      latitude: this.viewState.latitude,
+    };
     this.frame = 0;
     this.render();
     return { nFrames: dates.length, dates, bands };
@@ -214,6 +224,14 @@ class SatTileViewerInstance {
   setFrame(i: number) {
     if (i === this.frame) return;
     this.frame = i;
+    // Recentre on the store (dropping any pan) but keep the current zoom, so
+    // scrubbing always presents the frame centred instead of wherever the user
+    // last dragged to.
+    this.viewState = {
+      ...this.viewState,
+      longitude: this.homeLngLat.longitude,
+      latitude: this.homeLngLat.latitude,
+    };
     this.render();
   }
 
