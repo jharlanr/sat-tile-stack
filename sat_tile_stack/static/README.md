@@ -28,29 +28,17 @@ responses are gzipped instead.
 
 ## Source and rebuilding
 
-The widget's TypeScript source lives in a **separate repository**, not here:
-
-```
-deck.gl-raster/examples/qaanaaq-labeler-widget/src/index.ts
-```
-
-`viewer.js` is the Vite library-mode (IIFE) build of that entry. To rebuild
-after changing the source:
+The widget's TypeScript source is vendored in this repo under
+[`widget/`](../../widget/) — self-contained, with no other repository required.
+`viewer.js` is the Vite library-mode (IIFE) build of `widget/src/index.ts`.
+To rebuild after changing the source:
 
 ```bash
-cd deck.gl-raster/examples/qaanaaq-labeler-widget
-pnpm build
-cp dist/viewer.js /path/to/sat-tile-stack/sat_tile_stack/static/viewer.js
+cd widget
+npm install
+npm run build:install   # builds and copies dist/viewer.js here
 ```
 
-Then commit the updated `viewer.js`.
-
-### Build notes / gotchas (baked into that example's `vite.config.ts`)
-
-- **`process` shim.** Vite *library* mode does not replace
-  `process.env.NODE_ENV` the way app builds do, so deck.gl/luma.gl dev checks
-  reference an undefined `process` and throw on load. The config statically
-  replaces `process.env.NODE_ENV` and injects a `process` shim banner.
-- **Uncompressed stores.** The single-file IIFE can't load the separate
-  `zstd_codec.wasm` / `blosc_codec.wasm`, so compressed stores render blank.
-  Keep `da_to_geozarr` writing with `compressors=None`.
+Then commit the updated `viewer.js`. See [`widget/README.md`](../../widget/README.md)
+for build notes and gotchas (the `process` shim and the uncompressed-store
+requirement).

@@ -1,0 +1,26 @@
+{
+  "name": "sat-tile-stack-viewer-widget",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "vite build",
+    "build:install": "vite build && cp dist/viewer.js ../sat_tile_stack/static/viewer.js",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@deck.gl/core": "^9.3.6",
+    "@deck.gl/geo-layers": "^9.3.6",
+    "@deck.gl/layers": "^9.3.6",
+    "@deck.gl/mesh-layers": "^9.3.6",
+    "@developmentseed/deck.gl-raster": "0.8.0-beta.2",
+    "@developmentseed/deck.gl-zarr": "0.8.0-beta.2",
+    "@developmentseed/proj": "0.8.0-beta.2",
+    "@luma.gl/core": "^9.3.6",
+    "proj4": "^2.20.9",
+    "zarrita": "^0.7.3"
+  },
+  "devDependencies": {
+    "typescript": "^6.0.3",
+    "vite": "^8.1.4"
+  }
+}
