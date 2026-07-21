@@ -51,4 +51,4 @@ sts-cf-check = "sat_tile_stack.cf_check:main"
 packages = ["sat_tile_stack"]
 
 [tool.setuptools.package-data]
-"sat_tile_stack" = ["index.html"]
+"sat_tile_stack" = ["index.html", "static/*"]
