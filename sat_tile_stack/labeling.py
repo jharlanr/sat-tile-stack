@@ -11,6 +11,7 @@ Usage (console script, after `pip install sat-tile-stack[labeling]`):
 
 import sys
 import io
+import tempfile
 import threading
 import argparse
 from concurrent.futures import ThreadPoolExecutor
@@ -24,7 +25,9 @@ import matplotlib
 matplotlib.use("Agg")
 matplotlib.rcParams['figure.max_open_warning'] = 0  # suppress warning
 import matplotlib.pyplot as plt
-from flask import Flask, jsonify, send_file, request, send_from_directory
+import os
+import time
+from flask import Flask, jsonify, send_file, request, send_from_directory, g
 
 from sat_tile_stack.visualize import _render_frame
 
@@ -61,12 +64,45 @@ _in_flight = {}        # lake_id -> Future
 _cache_lock = threading.Lock()
 _prefetch_executor = ThreadPoolExecutor(max_workers=1)
 
+# ---------------------------------------------------------------------------
+# On-demand GeoZarr cache
+#
+# The browser image panel renders each lake's timestack client-side via
+# deck.gl-zarr. We convert the (already in-memory) DataArray to a GeoZarr store
+# the first time a lake is opened, cache it on disk, and serve it statically.
+# Conversion is cheap (~sub-second for a 512^2 tile) and reuses the prefetch
+# cache, so it piggybacks on the existing warm-ahead machinery.
+# ---------------------------------------------------------------------------
+
+ZARR_CACHE_DIR = Path(tempfile.mkdtemp(prefix="lakelabel_zarr_"))
+_zarr_ready = set()
+_zarr_lock = threading.Lock()
+
+
+def ensure_zarr(lake_id):
+    """Convert lake_id's timestack to a GeoZarr store if not already cached."""
+    with _zarr_lock:
+        if lake_id in _zarr_ready:
+            return
+        out = ZARR_CACHE_DIR / f"{lake_id}.zarr"
+        if not (out / "zarr.json").exists():
+            from sat_tile_stack.zarr_export import da_to_geozarr
+            da_to_geozarr(get_da(lake_id), out)
+        _zarr_ready.add(lake_id)
+
 
 def _load_da_blocking(lake_id):
     """Worker: open .nc and pull the variable fully into memory."""
     nc_path = NC_DIR / f"{lake_id}.nc"
     with xr.open_dataset(nc_path) as ds:
-        return ds[VAR].load()
+        da = ds[VAR].load()
+        # Carry the dataset-level CRS onto the DataArray so the GeoZarr export
+        # can geolocate the tile (it's lost when selecting a single variable).
+        if "crs" not in da.attrs:
+            crs = ds.attrs.get("crs") or ds.attrs.get("epsg")
+            if crs is not None:
+                da.attrs["crs"] = str(crs)
+        return da
 
 
 def get_da(lake_id):
@@ -169,6 +205,74 @@ def index():
     return send_from_directory(Path(__file__).parent, "index.html")
 
 
+@app.route("/static/<path:filename>")
+def static_files(filename):
+    """Serve the bundled deck.gl viewer widget (and any other static assets)."""
+    return send_from_directory(Path(__file__).parent / "static", filename)
+
+
+@app.route("/api/zarr/<lake_id>/<path:subpath>")
+def api_zarr(lake_id, subpath):
+    """Serve a file from a lake's on-demand GeoZarr store (zarr.json, chunks)."""
+    ensure_zarr(lake_id)
+    return send_from_directory(ZARR_CACHE_DIR / f"{lake_id}.zarr", subpath)
+
+
+# Zarr chunks are stored uncompressed (the browser bundle has no codec wasm),
+# so gzip the HTTP responses instead — keeps the widget bundle and the ~1.5 MB
+# raw chunks small over the wire (e.g. an SSH tunnel). The browser decompresses
+# transparently before zarrita ever sees the bytes.
+_GZIP_TYPES = {
+    "application/octet-stream",
+    "application/javascript",
+    "text/javascript",
+    "application/json",
+    "text/html",
+}
+
+
+@app.before_request
+def _req_start():
+    if os.environ.get("LAKELABEL_VERBOSE"):
+        g._t0 = time.time()
+
+
+@app.after_request
+def _req_log(resp):
+    if os.environ.get("LAKELABEL_VERBOSE"):
+        dt = (time.time() - getattr(g, "_t0", time.time())) * 1000
+        clen = resp.headers.get("Content-Length", "?")
+        sys.stderr.write(
+            f"REQ {request.method} {request.path} -> {resp.status_code} "
+            f"{clen}B {dt:.0f}ms\n"
+        )
+        sys.stderr.flush()
+    return resp
+
+
+@app.after_request
+def _gzip_response(resp):
+    import gzip as _gzip
+    try:
+        if "gzip" not in request.headers.get("Accept-Encoding", "").lower():
+            return resp
+        if resp.status_code >= 300 or resp.headers.get("Content-Encoding"):
+            return resp
+        if (resp.content_type or "").split(";")[0] not in _GZIP_TYPES:
+            return resp
+        resp.direct_passthrough = False
+        data = resp.get_data()
+        if len(data) < 1024:
+            return resp
+        comp = _gzip.compress(data, compresslevel=6)
+        resp.set_data(comp)
+        resp.headers["Content-Encoding"] = "gzip"
+        resp.headers["Vary"] = "Accept-Encoding"
+    except Exception:
+        return resp
+    return resp
+
+
 @app.route("/api/samples")
 def api_samples():
     """List all samples with labeled/unlabeled status."""
@@ -198,14 +302,28 @@ def api_info(lake_id):
     # Slide the prefetch window so upcoming samples warm in the background
     # while the user labels this one.
     slide_window(lake_id)
+    # Warm the GeoZarr store so the browser's first zarr.json request is fast.
+    ensure_zarr(lake_id)
     dates = [np.datetime_as_string(t, unit="D") for t in da.time.values]
     bands = [str(b) for b in da.band.values]
+
+    # Per-frame data availability. A "missing day" (no scene) is one whose RGB
+    # reflectance is entirely NaN — same test the main branch uses to draw a
+    # black frame. The browser shows a full-panel "No data" blank for these.
+    from sat_tile_stack.zarr_export import _band_names, _pick_rgb
+    names = _band_names(da)
+    rgb = _pick_rgb(names)
+    sel = [names.index(n) for n in rgb]
+    rgb_arr = da.isel(band=sel).values  # (time, 3, y, x)
+    has_data = (~np.isnan(rgb_arr).all(axis=(1, 2, 3))).tolist()
+
     return jsonify({
         "id": lake_id,
         "n_frames": len(dates),
         "dates": dates,
         "bands": bands,
         "shape": list(da.shape),
+        "has_data": has_data,
     })
 
 
@@ -462,6 +580,8 @@ def main(argv=None):
     def shutdown(sig, frame):
         print("\n\n  Labeling server stopped.")
         _prefetch_executor.shutdown(wait=False, cancel_futures=True)
+        import shutil as _shutil
+        _shutil.rmtree(ZARR_CACHE_DIR, ignore_errors=True)
         print(f"  Labels saved to: {LABELS_CSV}")
         df = load_labels_df()
         n_labeled = len(df.dropna(subset=["label"])) if "label" in df.columns else 0
